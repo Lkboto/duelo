@@ -7,7 +7,9 @@ Juego de lucha 1 contra 1 para navegador, al estilo Street Fighter, pensado para
 - **Estilo de animación de muñecos de palo**: fondo gris plano, muñeco negro contra muñeco blanco, armas grandes con su color, posturas exageradas y cámara que se acerca y se aleja según la distancia.
 - **Efectos de impacto**: estelas en cada golpe, destellos, chispas, salpicaduras que se quedan en el suelo (se pueden desactivar en *Controles*), humo, grietas y escombros.
 - **Combate con derribos**: los golpes fuertes lanzan al rival por los aires, que cae, se queda tendido y se levanta. Si dos golpes se cruzan, las armas chocan. El K.O. final va a cámara lenta.
-- **Dash** con doble toque de dirección y **barrido** universal con abajo + ataque ligero.
+- **Repertorio amplio para todos**: combo de 3 golpes, barrido, lanzador, ataques aéreos, picado, ataque en carrera, dash y doble salto (Kael tiene dos). Cada arma tiene sus propias animaciones y los guanteletes usan puñetazos y patadas.
+- **Animación fluida**: las poses se mezclan suavemente entre sí, el paso sigue la distancia recorrida, el movimiento se interpola entre fotogramas y hay aceleración al andar y control en el aire.
+- **Búfer de entrada y cancelaciones**: las pulsaciones hechas un poco antes de tiempo no se pierden, el combo se encadena solo y, si aciertas, puedes rematar con el ataque fuerte, con una habilidad o saltar tras el lanzador para seguir en el aire.
 - **Modo contra bot** con tres dificultades. El bot usa **siempre un personaje aleatorio**, distinto en cada combate.
 - **Modo 2 jugadores** en el mismo teclado.
 - **Selección en cuadrícula**: pasa el ratón por un retrato para ver al personaje en movimiento, sus estadísticas y sus golpes. Incluye casilla «Aleatorio».
@@ -39,8 +41,12 @@ Juego de lucha 1 contra 1 para navegador, al estilo Street Fighter, pensado para
 | Ataque fuerte | H | Num 2 |
 | Habilidad | J (con →/↓ cambia cuál) | Num 3 |
 | Bloquear | L (mantener) | Num 0 |
-| Dash | doble toque ← / → | doble toque ← / → |
+| Combo | G, G, G | Num 1 ×3 |
 | Barrido | S + G | ↓ + Num 1 |
+| Lanzador | S + H | ↓ + Num 2 |
+| Aire | G / H / S + H (picado) | Num 1 / Num 2 / ↓ + Num 2 |
+| Doble salto | W en el aire | ↑ en el aire |
+| Dash | doble toque A / D (+ G = ataque en carrera) | doble toque ← / → |
 | Pausa | Esc | Esc |
 
 Habilidades: **J** sola = habilidad neutral · **hacia el rival + J** = habilidad de avance · **↓ + J** = habilidad baja.
@@ -60,6 +66,7 @@ python3 -m http.server 8000
 index.html        Menús (HTML) y canvas
 css/style.css     Estilos de la interfaz
 js/characters.js  Datos de los personajes (stats, golpes, habilidades)
+js/moves.js       Repertorio de golpes generado a partir de cada personaje
 js/select.js      Pantalla de selección en cuadrícula
 js/sim.js         Simulación del combate (sin DOM, determinista)
 js/bot.js         IA del bot: genera las mismas entradas que un jugador

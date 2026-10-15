@@ -2,6 +2,8 @@
 // entradas por frame y actualiza el estado. Con las mismas entradas da
 // siempre el mismo resultado, que es lo que necesitará el online (rollback).
 
+import { buildMoves } from './moves.js';
+
 export const STAGE_W = 960;
 export const STAGE_H = 540;
 export const GROUND = 470;
@@ -12,14 +14,7 @@ const SKILL_KEYS = ['neutral', 'forward', 'down'];
 const DOUBLE_TAP = 14;   // frames para el doble toque del dash
 const DOWN_TIME = 40;    // frames tendido en el suelo tras un derribo
 const GETUP_TIME = 16;   // frames levantándose
-
-// Movimiento universal: agachado + ataque ligero
-export const SWEEP = {
-  name: 'Barrido', anim: 'sweepKick',
-  startup: 7, active: 4, recovery: 16, groundOnly: true, knockdown: true,
-  damage: 40, hitstun: 20, blockstun: 10, push: 3, hitstop: 6,
-  hitbox: { x: 4, y: -28, w: 74, h: 28 },
-};
+const BUFFER = 10;       // frames que se recuerda una pulsación hecha antes de tiempo
 
 export const EMPTY_INPUT = Object.freeze({
   up: false, down: false, left: false, right: false,
@@ -35,6 +30,7 @@ export class Fighter {
     this.index = index;
     this.wins = 0;
     this.color = def.color;
+    this.moves = buildMoves(def);
     this.reset(index === 0 ? 300 : STAGE_W - 300, index === 0 ? 1 : -1);
   }
 
@@ -56,6 +52,11 @@ export class Fighter {
     this.combo = 0;
     this.flash = 0;
     this.knock = false;
+    this.buffer = null;
+    this.jumpBuf = -99;
+    this.airJumps = def_airJumps(this.def);
+    this.landT = 99;
+    this.flipT = 99;
     this.dashDir = 0;
     this.tapDir = 0;
     this.tapFrame = -99;
@@ -108,6 +109,8 @@ export class Fighter {
   }
 }
 
+function def_airJumps(def) { return def.airJumps ?? 1; }
+
 function overlap(a, b) {
   return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 }
@@ -128,6 +131,7 @@ export class Match {
     this.events = [];      // efectos visuales que consume el renderizador
     this.hitstop = 0;
     this.frame = 0;
+    this.tick = 0;
     this.startRound();
   }
 
@@ -136,6 +140,7 @@ export class Match {
     a.reset(300, 1);
     b.reset(STAGE_W - 300, -1);
     this.projectiles = [];
+    this.prevPos = null;
     this.timer = this.roundTime * 60;
     this.phase = 'intro';
     this.phaseTime = 0;
@@ -151,12 +156,16 @@ export class Match {
     this.phaseTime++;
 
     if (this.slowmo > 0) this.slowmo--;
-    if (this.hitstop > 0) { this.hitstop--; return; }
-
     const acting = this.phase === 'fight';
     const [a, b] = this.fighters;
     const ia = acting ? inputs[0] : EMPTY_INPUT;
     const ib = acting ? inputs[1] : EMPTY_INPUT;
+    // Las pulsaciones se recuerdan incluso durante la pausa de impacto
+    this.recordInput(a, ia);
+    this.recordInput(b, ib);
+
+    if (this.hitstop > 0) { this.hitstop--; return; }
+    this.tick++;
 
     if (this.phase === 'intro' && this.phaseTime >= 110) this.setPhase('fight');
 
@@ -209,8 +218,15 @@ export class Match {
 
   updateFighter(f, inp, opp) {
     f.stateTime++;
+    if (f.landT < 99) f.landT++;
+    if (f.flipT < 99) f.flipT++;
     for (const k of SKILL_KEYS) if (f.cooldowns[k] > 0) f.cooldowns[k]--;
     if (f.flash > 0) f.flash--;
+
+    if (f.buffer && this.tick - f.buffer.tick > BUFFER) f.buffer = null;
+    const req = f.buffer;
+    const moves = f.moves;
+    const def = f.def;
 
     switch (f.state) {
       case 'ko':
@@ -220,7 +236,8 @@ export class Match {
       case 'blockstun':
         f.stun--;
         if (f.stun <= 0 && f.grounded && !f.knock) { f.setState('idle'); f.combo = 0; }
-        return;
+        else return;
+        break;
 
       case 'down':
         if (--f.stun <= 0) { f.setState('getup'); f.stun = GETUP_TIME; }
@@ -235,12 +252,12 @@ export class Match {
         const t = f.stateTime;
         f.vx = f.dashDir * (back ? 10 : 12.5) * Math.max(0.15, 1 - t / 14);
         if (t % 3 === 0) this.events.push({ type: 'dust', x: f.x - f.dashDir * 16, y: f.y });
-        // Se puede atacar desde el dash conservando parte de la inercia
-        if (t > 3 && (inp.lightP || inp.heavyP)) {
+        if (t > 2 && req && (req.type === 'light' || req.type === 'heavy')) {
           const v = f.vx;
-          const key = inp.lightP ? 'light' : 'heavy';
-          f.startMove(key, f.def.attacks[key]);
-          f.vx = v * 0.7;
+          if (req.type === 'light') f.startMove('dashLight', moves.dashLight);
+          else f.startMove('heavy', moves.heavy);
+          f.vx = v * (req.type === 'light' ? 0.9 : 0.6);
+          f.buffer = null;
           return;
         }
         if (t >= 14) f.setState('idle');
@@ -249,24 +266,40 @@ export class Match {
 
       case 'attack': {
         const m = f.move;
+        const ph = f.phase();
         if (m.dash && f.moveFrame >= m.dash.from && f.moveFrame < m.dash.to) {
           f.vx = f.facing * m.dash.speed;
           if (f.moveFrame % 4 === 0) this.events.push({ type: 'dust', x: f.x - f.facing * 20, y: f.y });
+        } else if (m.dive) {
+          if (ph === 'startup') { f.vy = Math.min(f.vy, -1.5); f.vx *= 0.8; }
+          else if (ph === 'active') { f.vy = m.dive; f.vx = f.facing * 3; }
         } else if (f.grounded) {
-          f.vx *= 0.6;
+          if (m.step && f.moveFrame >= m.startup - 2 && f.moveFrame < m.startup + m.active) f.vx = f.facing * m.step;
+          else f.vx *= m.keepMomentum ? 0.9 : 0.6;
         }
         if (m.hop && f.moveFrame === m.hop.at) { f.vy = m.hop.vy; f.y -= 1; }
         if (m.teleport && f.moveFrame === m.teleport.at) this.teleport(f, opp);
         if (m.heal && f.moveFrame === m.startup) {
           const before = f.hp;
-          f.hp = Math.min(f.def.maxHp, f.hp + m.heal);
-          this.events.push({ type: 'text', text: `+${f.hp - before}`, x: f.x, y: f.y - f.def.height - 20, color: '#5dff9d' });
-          this.events.push({ type: 'heal', x: f.x, y: f.y - f.def.height / 2, color: f.color });
+          f.hp = Math.min(def.maxHp, f.hp + m.heal);
+          this.events.push({ type: 'text', text: `+${f.hp - before}`, x: f.x, y: f.y - def.height - 20, color: '#5dff9d' });
+          this.events.push({ type: 'heal', x: f.x, y: f.y - def.height / 2, color: f.color });
         }
         if (m.projectile && f.moveFrame === m.startup) this.spawnProjectile(f, m.projectile);
         if (m.anim === 'slam' && f.moveFrame === m.startup) {
           this.events.push({ type: 'slam', x: f.x + f.facing * 40, y: f.y });
         }
+
+        // Cancelaciones: encadenar el combo, rematar con habilidad o saltar tras un lanzador
+        if (req && this.tryCancel(f, m, ph, req, inp)) return;
+        const wantsJump = inp.up || this.tick - f.jumpBuf <= BUFFER;
+        if (m.jumpCancel && f.hasHit && ph !== 'startup' && wantsJump && f.grounded && f.moveFrame >= m.startup + 2) {
+          f.jumpBuf = -99;
+          f.move = null; f.moveKey = null;
+          this.jump(f, inp);
+          return;
+        }
+
         f.moveFrame++;
         if (f.moveFrame >= f.moveLength()) {
           f.move = null;
@@ -279,12 +312,25 @@ export class Match {
 
     // Estados libres: el jugador controla al personaje
     f.combo = 0;
-    const toward = (inp.right && f.facing === 1) || (inp.left && f.facing === -1);
-    const def = f.def;
 
     if (!f.grounded) {
-      if (inp.lightP) f.startMove('light', def.attacks.light);
-      else if (inp.heavyP) f.startMove('heavy', def.attacks.heavy);
+      // Control en el aire y doble salto
+      const dir = inp.right ? 1 : inp.left ? -1 : 0;
+      f.vx += (dir * def.walkSpeed * 1.1 - f.vx) * (dir ? 0.12 : 0.03);
+      if (req && req.type === 'light') { f.startMove('airLight', moves.airLight); f.buffer = null; return; }
+      if (req && req.type === 'heavy') {
+        f.startMove(req.down ? 'plunge' : 'airHeavy', req.down ? moves.plunge : moves.airHeavy);
+        f.buffer = null;
+        return;
+      }
+      if ((inp.upP || this.tick - f.jumpBuf <= 2) && f.airJumps > 0 && f.stateTime > 4) {
+        f.jumpBuf = -99;
+        f.airJumps--;
+        f.vy = def.jumpVel * 0.88;
+        if (dir) f.vx = dir * def.walkSpeed * 1.15;
+        f.flipT = 0;
+        this.events.push({ type: 'airjump', x: f.x, y: f.y });
+      }
       return;
     }
 
@@ -305,40 +351,71 @@ export class Match {
       return;
     }
 
-    if (inp.skillP) {
-      const key = inp.down ? 'down' : (toward ? 'forward' : 'neutral');
-      if (f.cooldowns[key] <= 0) {
-        f.startMove(key, def.skills[key]);
-        f.cooldowns[key] = def.skills[key].cooldown;
-        return;
-      }
-    }
-    if (inp.lightP && inp.down) { f.startMove('sweep', SWEEP); return; }
-    if (inp.lightP) { f.startMove('light', def.attacks.light); return; }
-    if (inp.heavyP) { f.startMove('heavy', def.attacks.heavy); return; }
+    if (req && this.startRequested(f, req)) return;
 
     if (inp.block) { f.setState('block'); f.vx = 0; return; }
+    if (inp.up) { this.jump(f, inp); return; }
+    if (inp.down) { f.setState('crouch'); f.vx *= 0.5; return; }
 
-    if (inp.up) {
-      const dir = inp.right ? 1 : inp.left ? -1 : 0;
-      f.vy = def.jumpVel;
-      f.vx = dir * def.walkSpeed * 1.15;
-      f.y -= 1;
-      f.setState('jump');
-      return;
-    }
-
-    if (inp.down) { f.setState('crouch'); f.vx = 0; return; }
-
+    // Caminar con una pequeña aceleración: arranques y frenadas suaves
     const dir = inp.right ? 1 : inp.left ? -1 : 0;
-    if (dir !== 0) {
-      const backwards = dir !== f.facing;
-      f.vx = dir * def.walkSpeed * (backwards ? 0.8 : 1);
-      f.setState('walk');
+    const target = dir * def.walkSpeed * (dir && dir !== f.facing ? 0.8 : 1);
+    f.vx += (target - f.vx) * 0.35;
+    if (Math.abs(f.vx) < 0.15) f.vx = 0;
+    f.setState(dir !== 0 ? 'walk' : 'idle');
+  }
+
+  // Búfer de entrada: una pulsación hecha un poco antes de tiempo no se pierde
+  recordInput(f, inp) {
+    const toward = (inp.right && f.facing === 1) || (inp.left && f.facing === -1);
+    const press = inp.skillP ? 'skill' : inp.heavyP ? 'heavy' : inp.lightP ? 'light' : null;
+    if (press) f.buffer = { type: press, down: inp.down, toward, tick: this.tick };
+    if (inp.upP) f.jumpBuf = this.tick;
+  }
+
+  jump(f, inp) {
+    const dir = inp.right ? 1 : inp.left ? -1 : 0;
+    f.vy = f.def.jumpVel;
+    f.vx = dir ? dir * f.def.walkSpeed * 1.15 : f.vx * 0.5;
+    f.y -= 1;
+    f.setState('jump');
+    this.events.push({ type: 'dust', x: f.x, y: f.y });
+  }
+
+  // Empieza el golpe pedido desde un estado libre en el suelo
+  startRequested(f, req) {
+    const moves = f.moves;
+    if (req.type === 'skill') {
+      const key = req.down ? 'down' : (req.toward ? 'forward' : 'neutral');
+      if (f.cooldowns[key] > 0) return false;
+      f.startMove(key, f.def.skills[key]);
+      f.cooldowns[key] = f.def.skills[key].cooldown;
+    } else if (req.type === 'light') {
+      if (req.down) f.startMove('sweep', moves.sweep);
+      else f.startMove('light1', moves.light1);
     } else {
-      f.vx = 0;
-      f.setState('idle');
+      if (req.down) f.startMove('launcher', moves.launcher);
+      else f.startMove('heavy', moves.heavy);
     }
+    f.buffer = null;
+    return true;
+  }
+
+  // Ventanas de cancelación durante un ataque
+  tryCancel(f, m, ph, req, inp) {
+    const late = ph === 'recovery' || (ph === 'active' && f.hasHit);
+    if (!late || !f.grounded) return false;
+    // Siguiente golpe del combo (G, G, G)
+    if (m.chain && req.type === 'light' && !req.down) {
+      f.startMove(m.chain, f.moves[m.chain]);
+      f.buffer = null;
+      return true;
+    }
+    if (!f.hasHit) return false;
+    // Tras acertar un golpe del combo se puede rematar con el fuerte o con una habilidad
+    if (req.type === 'heavy' && (m.chain || f.moveKey === 'light3')) return this.startRequested(f, req);
+    if (req.type === 'skill' && !SKILL_KEYS.includes(f.moveKey)) return this.startRequested(f, req);
+    return false;
   }
 
   physics(f) {
@@ -348,6 +425,12 @@ export class Match {
       if (f.y >= GROUND) {
         f.y = GROUND;
         f.vy = 0;
+        f.landT = 0;
+        f.airJumps = def_airJumps(f.def);
+        if (f.state === 'attack' && f.move?.dive) {
+          f.moveFrame = Math.max(f.moveFrame, f.move.startup + f.move.active);
+          this.events.push({ type: 'slam', x: f.x + f.facing * 10, y: f.y });
+        }
         if (f.state === 'hitstun' && f.knock) {
           f.setState('down');
           f.stun = DOWN_TIME;
@@ -359,7 +442,7 @@ export class Match {
           this.events.push({ type: 'dust', x: f.x, y: f.y });
         }
         if (f.state === 'jump') f.setState('idle');
-        if (f.state === 'attack' && f.move && !f.move.dash) {
+        if (f.state === 'attack' && f.move && !f.move.dash && !f.move.dive) {
           // Aterrizar cancela el ataque aéreo
           f.move = null;
           f.setState('idle');
@@ -480,8 +563,9 @@ export class Match {
     const knock = spec.knockdown || spec.launch || spec.damage >= 95 || isCounter || def.combo >= 5;
     if (knock) {
       def.knock = true;
-      def.vy = spec.launch ? -10.5 : -7.5;
-      def.vx = dir * Math.max(Math.abs(spec.push), 5) * 1.25 * (spec.push < 0 ? -1 : 1);
+      def.vy = spec.launch ? -11.5 : -7.5;
+      // Los lanzadores suben al rival casi en vertical para poder seguirle en el aire
+      def.vx = spec.launch ? dir * 1.2 : dir * Math.max(Math.abs(spec.push), 5) * 1.25 * (spec.push < 0 ? -1 : 1);
       def.y -= 1;
     } else if (!def.grounded) {
       def.vy = -6;

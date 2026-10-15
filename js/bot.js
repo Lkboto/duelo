@@ -70,9 +70,39 @@ export class Bot {
     return this.build(me);
   }
 
-  setIntent(kind, hold, frames, press) {
-    this.intent = { kind, hold, press, pressed: false };
+  setIntent(kind, hold, frames, press, seq = null) {
+    this.intent = { kind, hold, press, pressed: false, seq, t: 0 };
     this.timer = frames;
+  }
+
+  // Secuencias de pulsaciones para encadenar combos (el búfer del juego las recoge)
+  combo(me, opp) {
+    const c = this.cfg;
+    const r = this.rng();
+    const len = c.aggression > 0.7 ? 3 : c.aggression > 0.5 ? (r < 0.6 ? 3 : 2) : (r < 0.4 ? 2 : 1);
+    const seq = [{ at: 0, key: 'light' }];
+    if (len >= 2) seq.push({ at: 9, key: 'light' });
+    if (len >= 3) {
+      if (this.rng() < 0.7) seq.push({ at: 18, key: 'light' });
+      else seq.push({ at: 19, key: 'heavy' });
+    }
+    if (len >= 3 && me.cooldowns.neutral <= 0 && this.rng() < c.aggression * 0.4) seq.push({ at: 34, key: 'skill' });
+    this.setIntent('combo', {}, seq[seq.length - 1].at + 10, null, seq);
+  }
+
+  launcherCombo() {
+    const seq = [
+      { at: 0, key: 'heavy', down: true },
+      { at: 14, key: 'up' }, { at: 15, key: 'up' }, { at: 16, key: 'up' },
+      { at: 25, key: 'light' }, { at: 36, key: 'heavy' },
+    ];
+    this.setIntent('launcher', {}, 50, null, seq);
+  }
+
+  jumpAttack() {
+    const plunge = this.rng() < 0.4;
+    const seq = [{ at: 0, key: 'up', toward: true }, plunge ? { at: 16, key: 'heavy', down: true } : { at: 12, key: 'light' }];
+    this.setIntent('jumpAttack', { toward: true }, 34, null, seq);
   }
 
   decide(me, opp, seen) {
@@ -112,8 +142,8 @@ export class Bot {
 
     // Castigar al rival si está aturdido o recuperándose
     if ((seen.oppStunned || seen.oppRecovering) && dist < heavyRange) {
-      const p = dist < lightRange ? 'light' : 'heavy';
-      this.setIntent('punish', {}, 6, p);
+      if (dist < lightRange) this.combo(me, opp);
+      else this.setIntent('punish', {}, 6, 'heavy');
       return;
     }
 
@@ -138,7 +168,8 @@ export class Bot {
       } else if (ranged && this.rng() < 0.5) {
         this.setIntent('wait', {}, think, null);
       } else if (!ranged && this.rng() < 0.35 + c.aggression * 0.2) {
-        this.setIntent('dash', { dash: 1 }, 14, null);
+        const attack = dist < 380 && this.rng() < 0.5;
+        this.setIntent('dash', { dash: 1 }, attack ? 22 : 14, null, attack ? [{ at: 7, key: 'light' }] : null);
       } else {
         this.setIntent('approach', { toward: true }, think + 10, null);
       }
@@ -152,8 +183,8 @@ export class Bot {
         this.setIntent('skill', { toward: true }, 8, 'skill');
       } else if (ready('neutral') && x < c.aggression * 0.35) {
         this.setIntent('skill', {}, 8, 'skill');
-      } else if (x < 0.12 * c.aggression + 0.05) {
-        this.setIntent('jump', { up: true, toward: true }, 3, null);
+      } else if (x < 0.18 * c.aggression + 0.05) {
+        this.jumpAttack();
       } else if (x > 0.92 - (1 - c.aggression) * 0.15) {
         this.setIntent('retreat', { away: true }, think, null);
       } else if (dist < heavyRange && x < 0.5 * c.aggression) {
@@ -166,7 +197,8 @@ export class Bot {
 
     // Cuerpo a cuerpo
     const x = this.rng();
-    if (x < c.aggression * 0.45) this.setIntent('attack', {}, 6, 'light');
+    if (x < c.aggression * 0.45) this.combo(me, opp);
+    else if (x < c.aggression * 0.55 && !ranged) this.launcherCombo();
     else if (x < c.aggression * 0.65) this.setIntent('attack', {}, 8, 'heavy');
     else if (x < c.aggression * 0.75 && ready('down') && !sk.down.heal) this.setIntent('skill', { down: true }, 8, 'skill');
     else if (x < c.aggression * 0.82) this.setIntent('attack', { down: true }, 8, 'light');
@@ -188,6 +220,16 @@ export class Bot {
     if (h.down) inp.down = true;
     if (h.block) inp.block = true;
     if (h.dash) { inp.dash = me.facing * h.dash; h.dash = 0; }
+    if (it.seq) {
+      for (const e of it.seq) {
+        if (e.at !== it.t) continue;
+        if (e.key === 'up') { inp.up = true; inp.upP = true; }
+        else { inp[e.key] = true; inp[e.key + 'P'] = true; }
+        if (e.down) inp.down = true;
+        if (e.toward) inp[towardKey] = true;
+      }
+      it.t++;
+    }
     if (it.press && !it.pressed && me.canAct) {
       inp[it.press] = true;
       inp[it.press + 'P'] = true;

@@ -10,6 +10,8 @@ const TAU = Math.PI * 2;
 const OUT = '#141414';
 const lerp = (a, b, t) => a + (b - a) * t;
 const ease = t => 1 - Math.pow(1 - t, 3);
+const easeInOut = t => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
+const easeOutQuart = t => 1 - Math.pow(1 - t, 4);
 const rand = (a, b) => a + Math.random() * (b - a);
 const GROUND_SCREEN = 452;   // altura en pantalla a la que se dibuja el suelo
 
@@ -27,13 +29,17 @@ function pose(f, t) {
   const p = {
     lean: 0.05, crouch: 0.1, shift: 0, weapon: -0.95, arm: 0.45, reach: 0,
     legA: 0.36, legB: -0.32, bob: Math.sin(t * 0.09 + f.index * 2) * 1.6,
-    rot: 0, aura: 0, auraColor: null, shield: false, back: null, alpha: 1, air: false, kick: null,
+    rot: 0, aura: 0, auraColor: null, shield: false, back: null, alpha: 1, air: false, kick: null, airTuck: undefined,
   };
   switch (f.state) {
     case 'walk': {
-      const s = Math.sin(f.stateTime * 0.32);
-      p.legA = s * 0.6; p.legB = -s * 0.6; p.bob = -Math.abs(s) * 3; p.lean = 0.12;
-      p.arm = 0.45 + s * 0.15;
+      // Fase del paso según la distancia recorrida: nunca da saltos
+      const ph = f.x * 0.085 * f.facing;
+      const s = Math.sin(ph);
+      const speed = Math.min(1, Math.abs(f.vx) / Math.max(1, f.def.walkSpeed));
+      p.legA = s * 0.62 * speed + 0.1; p.legB = -s * 0.62 * speed - 0.1;
+      p.bob = -Math.abs(Math.cos(ph)) * 3 * speed; p.lean = 0.06 + 0.1 * speed * Math.sign(f.vx * f.facing);
+      p.arm = 0.45 + s * 0.18 * speed; p.crouch = 0.08;
       break;
     }
     case 'crouch': p.crouch = 0.42; p.weapon = -0.3; p.legA = 0.62; p.legB = -0.5; p.lean = 0.15; break;
@@ -42,7 +48,10 @@ function pose(f, t) {
       p.weapon = -1.55; p.arm = 0.05; p.lean = f.state === 'blockstun' ? -0.25 : -0.08;
       p.shield = true; p.legA = 0.5; p.legB = -0.45; p.crouch = 0.18;
       break;
-    case 'jump': p.weapon = -1.3; p.lean = 0.1; break;
+    case 'jump':
+      p.weapon = -1.3; p.lean = 0.1;
+      if (f.flipT < 18) { p.rot = -easeInOut(f.flipT / 18) * TAU; p.airTuck = 1; }
+      break;
     case 'dash': {
       const fwd = f.dashDir === f.facing;
       p.lean = fwd ? 0.5 : -0.3; p.crouch = 0.22; p.legA = fwd ? 0.95 : 0.4; p.legB = fwd ? -0.8 : -0.9;
@@ -74,7 +83,14 @@ function pose(f, t) {
     }
     case 'attack': attackPose(f, p, t); break;
   }
-  if (!f.grounded && !['ko', 'down'].includes(f.state) && !(f.state === 'hitstun' && f.knock)) p.air = true;
+  if (!f.grounded && !['ko', 'down'].includes(f.state) && !(f.state === 'hitstun' && f.knock)) {
+    p.air = true;
+    if (p.airTuck === undefined) p.airTuck = 1 - Math.min(1, Math.abs(f.vy) / 7);
+  }
+  // Aterrizaje: pequeña flexión de rodillas
+  if (f.grounded && f.landT < 8 && ['idle', 'walk', 'crouch', 'attack', 'jump'].includes(f.state)) {
+    p.crouch += 0.26 * (1 - f.landT / 8);
+  }
   return p;
 }
 
@@ -87,10 +103,11 @@ function attackPose(f, p, t) {
   else if (ph === 'active') k = (fr - m.startup) / Math.max(1, m.active);
   else k = (fr - m.startup - m.active) / Math.max(1, m.recovery);
   k = Math.min(1, Math.max(0, k));
+  // Anticipación suave, golpe seco y vuelta suave a la guardia
   const seq = (wind, strike, rest) => {
-    if (ph === 'startup') return lerp(rest, wind, ease(k));
-    if (ph === 'active') return lerp(wind, strike, ease(k));
-    return lerp(strike, rest, ease(k));
+    if (ph === 'startup') return lerp(rest, wind, easeInOut(k));
+    if (ph === 'active') return lerp(wind, strike, easeOutQuart(k));
+    return lerp(strike, rest, easeInOut(k));
   };
   // Postura de ataque: piernas muy abiertas y cuerpo volcado hacia delante
   const lunge = (depth = 1) => {
@@ -99,7 +116,60 @@ function attackPose(f, p, t) {
     p.shift = seq(-6, 16, 0) * depth;
   };
 
-  switch (m.anim) {
+  let anim = m.anim;
+  if (f.def.weaponType === 'fists') anim = FIST_ANIM[anim] || anim;
+
+  switch (anim) {
+    case 'backhand':
+      p.weapon = seq(1.0, -2.4, -0.95); p.arm = seq(1.0, -1.1, 0.45); p.lean = seq(0.2, -0.18, 0.05); lunge(1.05);
+      if (f.def.weaponType === 'daggers') p.back = { arm: seq(-0.6, 1.0, 1.0), weapon: seq(-1.6, 0.6, -0.5) };
+      break;
+    case 'spin':
+      // Giro completo del arma: la vuelta de 360° ocurre solo durante el golpe
+      p.weapon = ph === 'startup' ? lerp(-0.95, -0.6, easeInOut(k))
+        : ph === 'active' ? lerp(-0.6, -0.6 + TAU, easeOutQuart(k)) : lerp(-0.6 + TAU, -0.95 + TAU, easeInOut(k));
+      p.arm = seq(-0.4, 1.1, 0.45);
+      p.lean = seq(-0.25, 0.32, 0.05); lunge(1.25);
+      if (ph === 'active') p.bob = -4;
+      break;
+    case 'rising':
+      p.crouch = seq(0.48, 0.0, 0.1); p.weapon = seq(2.5, -2.1, -0.95); p.arm = seq(1.6, -1.3, 0.45);
+      p.lean = seq(0.35, -0.3, 0.05); p.legA = 0.6; p.legB = -0.5; p.shift = seq(4, 8, 0);
+      break;
+    case 'airSlash':
+      p.weapon = seq(-2.7, 1.7, -0.95); p.arm = seq(-1.3, 1.1, 0.45); p.lean = seq(-0.25, 0.3, 0.05);
+      p.rot = seq(0.3, -0.4, 0); p.airTuck = 0.6;
+      break;
+    case 'airOverhead':
+      p.weapon = seq(-3.8, 1.8, -0.95); p.arm = seq(-2.3, 1.25, 0.45); p.lean = seq(-0.35, 0.6, 0.05); p.airTuck = 0.8;
+      break;
+    case 'plunge':
+      p.weapon = ph === 'startup' ? lerp(-0.95, -2.6, easeInOut(k)) : ph === 'active' ? 1.45 : lerp(1.45, -0.95, easeInOut(k));
+      p.arm = ph === 'active' ? 1.15 : 0.2; p.lean = ph === 'active' ? 0.4 : 0.1; p.airTuck = 1;
+      if (ph === 'recovery') { p.crouch = 0.4 * (1 - k); p.airTuck = 0; }
+      break;
+    case 'dashSlash':
+      p.weapon = seq(-0.5, 1.05, -0.95); p.arm = seq(-0.3, 0.9, 0.45); p.lean = seq(0.45, 0.55, 0.05);
+      p.legA = 0.95; p.legB = -0.85; p.crouch = 0.24; p.shift = seq(4, 14, 0);
+      break;
+    case 'hook':
+      p.arm = -0.2; p.back = { arm: seq(0.7, 0.0, 0.3), reach: seq(-4, 24, 0) }; p.lean = seq(-0.1, 0.35, 0.05); lunge();
+      break;
+    case 'roundhouse':
+      p.lean = seq(0, -0.4, 0.05); p.arm = -0.5; p.legB = -0.25;
+      p.kick = { x: seq(16, 70, 16), y: seq(-30, -92, 0) };
+      break;
+    case 'flyKick':
+      p.lean = -0.25; p.arm = -0.4; p.kick = { x: seq(10, 76, 20), y: seq(-40, -52, -30) }; p.airTuck = 0.5;
+      break;
+    case 'axeKick':
+      p.lean = seq(-0.3, 0.3, 0.05); p.arm = -0.6; p.kick = { x: seq(20, 56, 20), y: seq(-128, -24, -30) }; p.airTuck = 0.5;
+      break;
+    case 'stomp':
+      p.lean = 0.2; p.arm = -0.8; p.airTuck = 1;
+      if (ph === 'active') p.kick = { x: 14, y: 6 };
+      if (ph === 'recovery') { p.crouch = 0.4 * (1 - k); p.airTuck = 0; }
+      break;
     case 'slash':
       p.weapon = seq(-2.4, 0.9, -0.95); p.arm = seq(-1.1, 0.75, 0.45); p.lean = seq(-0.2, 0.35, 0.05); lunge();
       if (f.def.weaponType === 'daggers') p.back = { arm: seq(1.0, -0.5, 1.0), weapon: seq(0.4, -1.8, -0.5) };
@@ -182,6 +252,51 @@ function attackPose(f, p, t) {
   }
 }
 
+// Los guanteletes no tienen arma: ciertos golpes se convierten en puñetazos y patadas
+const FIST_ANIM = {
+  slash: 'punch', backhand: 'hook', spin: 'roundhouse', rising: 'uppercut', airSlash: 'flyKick',
+  airOverhead: 'axeKick', plunge: 'stomp', dashSlash: 'punch',
+};
+
+// ---------- Suavizado entre poses ----------
+// Cada fotograma la pose dibujada se acerca a la pose objetivo, de modo que
+// los cambios de estado (andar → atacar → guardia) nunca dan saltos bruscos.
+const smoothState = new WeakMap();
+const NUM_KEYS = ['lean', 'crouch', 'shift', 'reach', 'legA', 'legB', 'bob', 'aura', 'airTuck'];
+const ANGLE_KEYS = ['weapon', 'arm', 'rot'];
+const wrap = d => d - TAU * Math.round(d / TAU);
+
+function smoothPose(key, target, f) {
+  const now = typeof performance !== 'undefined' ? performance.now() : 0;
+  const st = smoothState.get(key);
+  if (!st) { smoothState.set(key, { p: { ...target }, t: now }); return target; }
+  const dt = Math.min(0.1, Math.max(0, (now - st.t) / 1000));
+  st.t = now;
+  const rate = f.state === 'attack' ? 40 : f.state === 'hitstun' || f.state === 'dash' ? 30 : 15;
+  const k = 1 - Math.exp(-rate * dt);
+  const prev = st.p;
+  const out = { ...target };
+  for (const n of NUM_KEYS) {
+    const a = prev[n] ?? target[n] ?? 0, b = target[n] ?? 0;
+    out[n] = a + (b - a) * k;
+  }
+  for (const n of ANGLE_KEYS) out[n] = prev[n] + wrap(target[n] - prev[n]) * k;
+  if (target.back) {
+    const pb = prev.back || target.back;
+    out.back = {
+      arm: pb.arm + wrap(target.back.arm - pb.arm) * k,
+      weapon: (pb.weapon ?? target.back.weapon ?? 0) + wrap((target.back.weapon ?? 0) - (pb.weapon ?? target.back.weapon ?? 0)) * k,
+      reach: (pb.reach || 0) + ((target.back.reach || 0) - (pb.reach || 0)) * k,
+    };
+  }
+  if (target.kick) {
+    const pk = prev.kick || target.kick;
+    out.kick = { x: pk.x + (target.kick.x - pk.x) * Math.max(k, 0.5), y: pk.y + (target.kick.y - pk.y) * Math.max(k, 0.5) };
+  }
+  st.p = out;
+  return out;
+}
+
 // ---------- Dibujo del muñeco ----------
 function ik(a, b, l1, l2, prefer) {
   const dx = b.x - a.x, dy = b.y - a.y;
@@ -223,7 +338,8 @@ const TWO_HANDED = { hammer: -20, spear: -30, scythe: -24, staff: -26 };
 export function drawFigure(ctx, f, t, opts = {}) {
   const d = f.def;
   const s = d.height / 120;
-  const p = pose(f, t);
+  const raw = pose(f, t);
+  const p = opts.raw ? raw : smoothPose(opts.key || f, raw, f);
   const flash = f.flash > 0 && f.flash % 2 === 0;
   const body = opts.body || (flash ? f.color : BODY[f.index % 2]);
   const back = opts.body || (flash ? f.color : BODY_BACK[f.index % 2]);
@@ -266,7 +382,13 @@ export function drawFigure(ctx, f, t, opts = {}) {
 
   // Piernas (rodillas hacia delante)
   let feet;
-  if (p.air) feet = [{ x: 16, y: hipY + 34 }, { x: -8, y: hipY + 42 }];
+  if (p.air) {
+    const tk = Math.max(0, Math.min(1, p.airTuck ?? 0.5));
+    feet = [
+      { x: lerp(10, 18, tk), y: hipY + lerp(54, 30, tk) },
+      { x: lerp(-14, -6, tk), y: hipY + lerp(50, 38, tk) },
+    ];
+  }
   else feet = [{ x: Math.sin(p.legA) * 30, y: 0 }, { x: Math.sin(p.legB) * 30, y: 0 }];
   if (p.kick) feet[0] = p.kick;
   if ((f.state === 'down' || f.state === 'ko') && f.grounded) { feet[0] = { x: 10, y: hipY + 56 }; feet[1] = { x: -6, y: hipY + 57 }; }
@@ -513,6 +635,10 @@ export class Renderer {
           }
           for (let i = 0; i < 4; i++) this.smoke(e.x - e.dir * 10, e.y - 4, rand(6, 11), -e.dir * rand(1, 3), rand(-1, -0.2), 22, 0.4);
           break;
+        case 'airjump':
+          this.particles.push({ kind: 'groundRing', x: e.x, y: e.y + 4, life: 12, max: 12, r: 34 });
+          for (let i = 0; i < 3; i++) this.smoke(e.x + rand(-10, 10), e.y, rand(5, 8), rand(-1, 1), rand(0.5, 1.5), 18, 0.35);
+          break;
         case 'teleport':
           for (let i = 0; i < 20; i++) {
             const a = Math.random() * TAU;
@@ -596,10 +722,10 @@ export class Renderer {
   }
 
   // ---------- Cámara ----------
-  updateCamera(match) {
+  updateCamera(match, view) {
     let tx = STAGE_W / 2, tz = 1.15, speed = 0.08;
     if (match) {
-      const [a, b] = match.fighters;
+      const [a, b] = view || match.fighters;
       const sep = Math.abs(a.x - b.x);
       tx = (a.x + b.x) / 2;
       tz = Math.max(1, Math.min(1.45, STAGE_W / (sep + 420)));
@@ -636,7 +762,17 @@ export class Renderer {
     }
     const progressed = match && match.frame !== this.lastFrame && match.hitstop === 0;
     if (match) this.lastFrame = match.frame;
-    this.updateCamera(match);
+    // Interpolación entre el frame anterior y el actual de la simulación
+    const alpha = Math.max(0, Math.min(1, opts.alpha ?? 1));
+    const view = match ? match.fighters.map((f, i) => {
+      const prev = match.prevPos?.[i];
+      if (!prev) return f;
+      const v = Object.create(f);
+      v.x = lerp(prev.x, f.x, alpha);
+      v.y = lerp(prev.y, f.y, alpha);
+      return v;
+    }) : null;
+    this.updateCamera(match, view);
 
     ctx.save();
     drawBackground(ctx, this.stage);
@@ -651,10 +787,11 @@ export class Renderer {
     if (match) {
       for (const p of match.projectiles) this.drawProjectile(ctx, p, match);
       this.updateGhosts(ctx, match, progressed);
-      const order = [...match.fighters].sort((a, b) => (a.state === 'attack') - (b.state === 'attack'));
-      for (const f of order) {
+      const order = [...view].sort((a, b) => (a.state === 'attack') - (b.state === 'attack'));
+      for (const v of order) {
+        const f = match.fighters[v.index];
         const capture = this.wantsTrail(f) ? [] : null;
-        drawFigure(ctx, f, this.t, capture ? { onStrike: (a, b) => capture.push(a, b) } : {});
+        drawFigure(ctx, v, this.t, capture ? { key: f, onStrike: (a, b) => capture.push(a, b) } : { key: f });
         this.recordTrail(f, capture, progressed);
       }
       for (const f of match.fighters) this.drawTrail(ctx, f);
@@ -718,7 +855,7 @@ export class Renderer {
     }
     for (const g of this.ghosts) {
       g.life--;
-      drawFigure(ctx, g.snap, this.t, { alpha: 0.28 * g.life / 10, body: hexA(g.snap.color, 1), noShadow: true });
+      drawFigure(ctx, g.snap, this.t, { alpha: 0.28 * g.life / 10, body: hexA(g.snap.color, 1), noShadow: true, raw: true });
     }
     this.ghosts = this.ghosts.filter(g => g.life > 0);
   }

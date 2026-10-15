@@ -23,19 +23,25 @@
 export const CHARACTERS = {
   kael: {
     id: 'kael', name: 'Kael', weapon: 'Espada', weaponType: 'sword',
-    description: 'Rápido y equilibrado. Presiona con cortes veloces y castiga con su contraataque.',
+    description: 'Ligero y veloz. Encadena cortes rapidísimos, salta dos veces y castiga con su contraataque.',
     color: '#3a86ff',
-    maxHp: 1000, walkSpeed: 4.2, jumpVel: -15.5, gravity: 0.8, width: 46, height: 120,
+    maxHp: 920, walkSpeed: 5.0, jumpVel: -15, gravity: 0.72, width: 44, height: 120, airJumps: 2,
+    moves: {
+      light2: { name: 'Revés', anim: 'backhand', startup: 3, active: 3, recovery: 8, damage: 40, hitstun: 15, blockstun: 9, push: 3, hitstop: 4,
+        hitbox: { x: 14, y: -116, w: 82, h: 54 }, step: 3.5, chain: 'light3' },
+      light3: { name: 'Torbellino', anim: 'spin', startup: 6, active: 6, recovery: 16, damage: 62, hitstun: 22, blockstun: 12, push: 7, hitstop: 8,
+        knockdown: true, hitbox: { x: 4, y: -122, w: 104, h: 76 }, step: 6 },
+    },
     attacks: {
       light: {
         name: 'Corte rápido', anim: 'slash',
-        startup: 5, active: 3, recovery: 10,
-        damage: 45, hitstun: 15, blockstun: 10, push: 3.5, hitstop: 5,
+        startup: 4, active: 3, recovery: 8,
+        damage: 42, hitstun: 15, blockstun: 10, push: 3, hitstop: 4,
         hitbox: { x: 16, y: -100, w: 78, h: 38 },
       },
       heavy: {
         name: 'Tajo descendente', anim: 'overhead',
-        startup: 13, active: 4, recovery: 22,
+        startup: 11, active: 4, recovery: 18,
         damage: 100, hitstun: 24, blockstun: 16, push: 8, hitstop: 9,
         hitbox: { x: 16, y: -125, w: 100, h: 80 },
       },
@@ -66,7 +72,7 @@ export const CHARACTERS = {
     id: 'brakka', name: 'Brakka', weapon: 'Martillo', weaponType: 'hammer',
     description: 'Lento pero demoledor. Rompe guardias y aguanta golpes mientras embiste.',
     color: '#fb8500',
-    maxHp: 1150, walkSpeed: 3.0, jumpVel: -14, gravity: 0.82, width: 56, height: 128,
+    maxHp: 1200, walkSpeed: 3.4, jumpVel: -14, gravity: 0.82, width: 56, height: 128,
     attacks: {
       light: {
         name: 'Mazazo', anim: 'slash',
@@ -280,7 +286,7 @@ export const CHARACTERS = {
     id: 'morra', name: 'Morra', weapon: 'Guadaña', weaponType: 'scythe',
     description: 'Atrae a sus rivales con la guadaña y les roba la vida.',
     color: '#f15bb5',
-    maxHp: 1000, walkSpeed: 3.6, jumpVel: -15, gravity: 0.8, width: 46, height: 126,
+    maxHp: 1060, walkSpeed: 3.9, jumpVel: -15, gravity: 0.8, width: 46, height: 126,
     attacks: {
       light: {
         name: 'Tajo', anim: 'slash',

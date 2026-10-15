@@ -33,6 +33,7 @@ const state = {
   controlsReturn: 'menu',
   controlsPlayer: 0,
   slowTick: 0,
+  sinceStep: 0,
 };
 
 // ---------- Pantallas ----------
@@ -227,7 +228,9 @@ function frame(now) {
     const m = state.match;
     if (m && state.screen === 'game' && !state.paused) {
       // Cámara lenta en el K.O.: la simulación avanza un frame de cada tres
-      if (m.slowmo > 0 && (state.slowTick++ % 3) !== 0) { acc -= STEP; continue; }
+      if (m.slowmo > 0 && (state.slowTick++ % 3) !== 0) { state.sinceStep++; acc -= STEP; continue; }
+      state.sinceStep = 0;
+      m.prevPos = m.fighters.map(f => ({ x: f.x, y: f.y }));
       const i1 = input.poll(0);
       const i2 = state.bot ? state.bot.getInput(m, m.fighters[1], m.fighters[0]) : input.poll(1);
       input.endPoll();
@@ -248,6 +251,7 @@ function frame(now) {
   renderer.draw(m, {
     showHitboxes: state.showHitboxes,
     blood: settings.blood,
+    alpha: state.paused ? 1 : (m && m.slowmo > 0 ? (state.sinceStep + acc / STEP) / 3 : acc / STEP),
     bindings: input.bindings,
     botIndex: state.bot ? 1 : -1,
     labels: state.mode === 'vsbot'

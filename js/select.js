@@ -6,7 +6,13 @@ import { Fighter, GROUND, STAGE_W } from './sim.js';
 import { drawFigure, hexA, BODY } from './render.js';
 import { controlName } from './input.js';
 
-const MOVE_KEYS = [['light', 'attacks'], ['heavy', 'attacks'], ['neutral', 'skills'], ['forward', 'skills'], ['down', 'skills']];
+import { moveList } from './moves.js';
+
+// Demostraciones que hace el personaje en la previsualización
+const DEMOS = [
+  ['light1', 'light2', 'light3'], ['light1', 'light2', 'light3'], ['heavy'], ['launcher'], ['sweep'],
+  ['dashLight'], ['skill:neutral'], ['skill:forward'], ['skill:down'],
+];
 
 // Valores para las barras de estadísticas (1-5)
 function stats(c) {
@@ -159,9 +165,10 @@ export class CharacterSelect {
         `<span>${n}</span><div class="bar">${[1, 2, 3, 4, 5].map(j => `<i style="${j <= v ? `background:${c.color}` : ''}"></i>`).join('')}</div>`).join('')}
       </div>
       <div class="moves">
-        <kbd>${k('light')}</kbd><span>${c.attacks.light.name}</span>
-        <kbd>↓+${k('light')}</kbd><span>Barrido</span>
-        <kbd>${k('heavy')}</kbd><span>${c.attacks.heavy.name}</span>
+        ${moveList(c).map(([key, name]) => {
+          const keys = t => t.replaceAll('{L}', k('light')).replaceAll('{H}', k('heavy'));
+          return `<kbd>${keys(key)}</kbd><span>${keys(name)}</span>`;
+        }).join('')}
         <kbd>${k('skill')}</kbd><span>${c.skills.neutral.name}</span>
         <kbd>${fwd}+${k('skill')}</kbd><span>${c.skills.forward.name}</span>
         <kbd>↓+${k('skill')}</kbd><span>${c.skills.down.name}</span>
@@ -208,13 +215,17 @@ export class CharacterSelect {
 
       // Hace un movimiento de demostración de vez en cuando
       f.stateTime++;
+      const begin = key => key.startsWith('skill:') ? f.startMove(key.slice(6), f.def.skills[key.slice(6)]) : f.startMove(key, f.moves[key]);
       if (f.state === 'attack') {
         f.moveFrame++;
-        if (f.moveFrame >= f.moveLength()) { f.move = null; f.setState('idle'); }
+        // Encadena el siguiente golpe del combo al entrar en la recuperación
+        if (s.queue?.length && f.moveFrame >= f.move.startup + f.move.active + 2) begin(s.queue.shift());
+        else if (f.moveFrame >= f.moveLength()) { f.move = null; f.setState('idle'); }
       } else if (--s.nextMove <= 0) {
-        const [key, group] = MOVE_KEYS[Math.floor(Math.random() * MOVE_KEYS.length)];
-        f.startMove(key, f.def[group][key]);
-        s.nextMove = 80 + Math.floor(Math.random() * 60);
+        const demo = DEMOS[Math.floor(Math.random() * DEMOS.length)];
+        begin(demo[0]);
+        s.queue = demo.slice(1);
+        s.nextMove = 60 + Math.floor(Math.random() * 50);
       }
       drawInto(ctx, f, this.t, W, H, 1.3);
     });
