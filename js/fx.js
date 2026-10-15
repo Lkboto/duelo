@@ -10,7 +10,10 @@ const FXProto = {
 
   clear() { this.parts.length = 0; this.texts.length = 0; },
 
+  mute: false,       // true al resimular en el online: no se crean efectos
+
   add(p) {
+    if (this.mute) return p;
     if (this.parts.length > this.max) this.parts.shift();
     p.age = 0;
     this.parts.push(p);
@@ -78,6 +81,14 @@ const FXProto = {
   slashArc(x, y, r, a0, a1, color, life = 12, w = 10) {
     this.add({ k: 'arc', x, y, r, a0, a1, life, color, w });
   },
+  // tajo: una hoja de luz fina que cruza el punto de impacto
+  streak(x, y, ang, len = 80, w = 7, color = '#ffffff', life = 8) {
+    this.add({ k: 'streak', x, y, ang, len, w, color, life });
+  },
+  // estallido: estrella de puntas cortas (golpes contundentes)
+  burst(x, y, r = 30, color = '#ffffff', ang = 0, life = 7) {
+    this.add({ k: 'burst', x, y, r, color, ang, life });
+  },
   speedLine(x, y, vx, vy, color) {
     this.add({ k: 'spark', x, y, vx, vy, life: 10, color, w: 1.5, drag: 0.9, g: 0 });
   },
@@ -91,10 +102,12 @@ const FXProto = {
   },
 
   text(x, y, str, color = '#fff', size = 22, life = 50, opts = {}) {
+    if (this.mute) return;
     this.texts.push({ x, y, str, color, size, life, age: 0, vy: opts.vy == null ? -1.2 : opts.vy, pop: opts.pop == null ? 1 : opts.pop, follow: opts.follow || null, key: opts.key || null });
   },
   // contador de combo pegado a un luchador; reemplaza el anterior
   combo(fighter, hits, dmg) {
+    if (this.mute) return;
     const key = 'combo' + fighter.id;
     let t = this.texts.find((q) => q.key === key);
     if (!t) {
@@ -225,6 +238,39 @@ const FXProto = {
           ctx.beginPath(); ctx.arc(p.x, p.y, p.r, p.a0, lerp(p.a0, p.a1, grow), p.a1 < p.a0); ctx.stroke();
           ctx.strokeStyle = `rgba(255,255,255,${a})`; ctx.lineWidth = p.w * 0.35 * a + 0.5;
           ctx.beginPath(); ctx.arc(p.x, p.y, p.r, p.a0, lerp(p.a0, p.a1, grow), p.a1 < p.a0); ctx.stroke();
+          ctx.globalCompositeOperation = 'source-over';
+          break;
+        }
+        case 'streak': {
+          // se abre rápido y se afina mientras se apaga
+          ctx.globalCompositeOperation = 'lighter';
+          const open = Ease.outExpo(Math.min(1, u * 3.5));
+          const L = p.len * (0.55 + 0.45 * open), W = p.w * a;
+          ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.ang);
+          for (let pass = 0; pass < 2; pass++) {
+            const ww = pass ? W * 0.35 : W, ll = pass ? L * 0.85 : L;
+            ctx.fillStyle = pass ? `rgba(255,255,255,${a})` : rgba(p.color, 0.85 * a);
+            ctx.beginPath(); ctx.moveTo(-ll / 2, 0);
+            ctx.quadraticCurveTo(0, -ww, ll / 2, 0); ctx.quadraticCurveTo(0, ww, -ll / 2, 0);
+            ctx.fill();
+          }
+          ctx.restore();
+          ctx.globalCompositeOperation = 'source-over';
+          break;
+        }
+        case 'burst': {
+          ctx.globalCompositeOperation = 'lighter';
+          const r = p.r * (0.6 + 0.6 * Ease.outCubic(u));
+          ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.ang);
+          ctx.fillStyle = `rgba(255,255,255,${0.9 * a})`;
+          ctx.beginPath();
+          for (let i = 0; i < 16; i++) {
+            const rr = i % 2 ? r * 0.28 : r * (i % 4 ? 0.7 : 1), aa = (i / 16) * TAU;
+            ctx.lineTo(Math.cos(aa) * rr, Math.sin(aa) * rr);
+          }
+          ctx.closePath(); ctx.fill();
+          ctx.strokeStyle = rgba(p.color, a); ctx.lineWidth = 3 * a + 0.5; ctx.stroke();
+          ctx.restore();
           ctx.globalCompositeOperation = 'source-over';
           break;
         }

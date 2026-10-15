@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Duelo · banco de pruebas online</title>
+<style>
+  body { background: #0b0b12; color: #e8e6e3; font: 14px/1.4 system-ui, sans-serif; margin: 24px; }
+  table { border-collapse: collapse; margin-top: 12px; }
+  td, th { border: 1px solid #333; padding: 4px 8px; text-align: right; }
+  th { background: #1a1a26; }
+  td:first-child, th:first-child { text-align: left; }
+  .bad { color: #ff6b6b; }
+</style>
+</head>
+<body>
+<h1>Banco de pruebas online</h1>
+<p>Dos clientes con bots, reloj virtual y red simulada. <button id="go">Ejecutar escenarios</button></p>
+<div id="out"></div>
+
+<script src="../js/util.js"></script>
+<script src="../js/audio.js"></script>
+<script src="../js/input.js"></script>
+<script src="../js/fx.js"></script>
+<script src="../js/skeleton.js"></script>
+<script src="../js/characters.js"></script>
+<script src="../js/stages.js"></script>
+<script src="../js/fighter.js"></script>
+<script src="../js/ai.js"></script>
+<script src="../js/game.js"></script>
+<script src="../js/net.js"></script>
+<script src="netsim.js"></script>
+<script>
+  function render(rows) {
+    const cols = ['scenario', 'delay', 'P1.stallFrames', 'P2.stallFrames', 'P1.jerkPct', 'P2.jerkPct', 'P1.lostMs', 'P2.lostMs',
+      'P1.resyncs', 'P1.rollbacks', 'P1.maxRollback', 'P1.inputLagMs', 'desyncTicks', 'comparedTicks', 'cpuAvgMs', 'cpuMaxMs'];
+    const get = (r, c) => c.split('.').reduce((o, k) => (o == null ? o : o[k]), r);
+    let h = '<table><tr>' + cols.map((c) => `<th>${c}</th>`).join('') + '</tr>';
+    for (const r of rows) h += '<tr>' + cols.map((c) => `<td>${get(r, c)}</td>`).join('') + '</tr>';
+    document.getElementById('out').innerHTML = h + '</table>';
+  }
+  document.getElementById('go').onclick = () => {
+    const rows = NetSim.runAll();
+    window.lastResults = rows;
+    render(rows);
+  };
+</script>
+</body>
+</html>

@@ -7,8 +7,9 @@ const SLOT_COLORS = ['#ff4d6d', '#4dabff', '#ffd23f', '#5dff9a'];
 const ALT_PALETTE = { color: '#f5f5f5', shade: '#9aa0ad' };
 // campos del luchador que no se copian tal cual al serializar
 const F_SKIP = new Set(['char', 'ctrl', 'bot', 'pose', 'target', 'J', 'Jprev', 'JR', 'chains', 'wTrail', 'lTrail', 'ghosts', 'rng', 'ragPrev',
-  'rag', 'atk', 'atkState', 'hitGroups', 'cd', 'buf', 'groundPlat', 'lastAttacker', 'pendingKB', 'dashDir', 'stats', 'trailJoint']);
-const F_LOAD_SPECIAL = { poseCur: 1, poseVel: 1, J: 1, Jx: 1, cd: 1, buf: 1, atk: 1, atkState: 1, hitGroups: 1, groundPlat: 1,
+  'rag', 'atk', 'atkState', 'hitGroups', 'cd', 'buf', 'groundPlat', 'lastAttacker', 'pendingKB', 'dashDir', 'stats', 'trailJoint',
+  'ragKeep', 'visX', 'visY']);
+const F_LOAD_SPECIAL = { poseCur: 1, poseVel: 1, poseTgt: 1, J: 1, Jx: 1, cd: 1, buf: 1, atk: 1, atkState: 1, hitGroups: 1, groundPlat: 1,
   lastAttacker: 1, pendingKB: 1, dashDir: 1, stats: 1, held: 1, pressed: 1 };
 
 class Projectile {
@@ -41,6 +42,8 @@ class Match {
     this.focus = null;
     this.banner = null;
     this.onEnd = cfg.onEnd || null;
+    this.resim = false;             // true mientras el online resimula ticks ya vistos
+    this.fxShown = new Map();       // efectos de impacto ya mostrados (no se repiten al resimular)
     const usedChars = {};
     cfg.players.forEach((p, i) => {
       const ch = CHAR_BY_ID[p.charId];
@@ -69,6 +72,11 @@ class Match {
   slowmo(scale, ticks) { this.slowScale = scale; this.slowT = Math.max(this.slowT, ticks); }
   shake(amount) { this.cam.trauma = Math.min(1, this.cam.trauma + amount * Settings.shake); }
   punch(amount) { this.cam.punch = Math.min(0.18, this.cam.punch + amount * Math.min(1, Settings.shake)); }
+  // empujón de cámara en una dirección (se recupera con un muelle)
+  kick(x, y) {
+    const c = this.cam, k = Math.min(1, Settings.shake);
+    c.kx = clamp((c.kx || 0) + x * k, -26, 26); c.ky = clamp((c.ky || 0) + y * k, -26, 26);
+  }
 
   startRound() {
     this.round++;
@@ -92,6 +100,16 @@ class Match {
 
   showBanner(text, life, color, sub) { this.banner = { text, life, age: 0, color, sub }; }
 
+  // Efectos de un suceso (golpe, K.O.): al resimular (rollback online) solo se
+  // muestran si no se vieron ya; así no se duplican chispas ni sonidos.
+  fxOnce(key, fn) {
+    if (!this.resim) { this.fxShown.set(key, this.tick); fn(); return; }
+    if (this.fxShown.has(key)) return;
+    this.fxShown.set(key, this.tick);
+    this.fx.mute = false; Sfx.silent--;
+    try { fn(); } finally { this.fx.mute = true; Sfx.silent++; }
+  }
+
   // ── bucle de lógica (1 tick = 1/60 s de juego) ──
   update() {
     if (this.paused) return;
@@ -101,6 +119,7 @@ class Match {
     this.phaseT++;
     if (this.banner) { this.banner.age++; if (this.banner.age >= this.banner.life) this.banner = null; }
     if (this.screenFlash > 0) this.screenFlash = Math.max(0, this.screenFlash - 0.08);
+    if (this.tick % 120 === 0) for (const [k, t] of this.fxShown) if (t < this.tick - 240) this.fxShown.delete(k);
 
     const controlsOn = this.phase === 'fight' || this.phase === 'ko';
     if (this.phase === 'intro') {
@@ -170,7 +189,11 @@ class Match {
   }
 
   // ── golpes ──
+  // Dos fases: primero se buscan todos los impactos del tick con el estado
+  // de todos a la vez y luego se aplican. Así dos golpes simultáneos se
+  // intercambian en vez de ganar siempre el luchador con el índice menor.
   resolveHits() {
+    const found = [];
     for (const A of this.fighters) {
       if (!A.alive || A.state !== 'attack' || !A.atk || A.hitstop > 0) continue;
       const m = A.atk, t = A.atkTime;
@@ -179,17 +202,34 @@ class Match {
         const cx = A.x + hb.x * A.facing, cy = A.y + hb.y;
         for (const D of this.fighters) {
           if (D === A || !D.alive || D.team === A.team) continue;
-          const set = A.hitGroups[hb.group] || (A.hitGroups[hb.group] = new Set());
-          if (set.has(D.id)) continue;
-          if (!circleRect(cx, cy, hb.r, ...Object.values(D.hurtbox()))) continue;
-          if (D.invulnerable) continue;
-          set.add(D.id);
-          this.applyHit(A, D, hb, { cx, cy, dirX: A.facing });
-          if (A.state !== 'attack' || !A.atk) break;
+          const set = A.hitGroups[hb.group];
+          if (set && set.has(D.id)) continue;
+          const hbx = D.hurtbox();
+          if (!circleRect(cx, cy, hb.r, hbx.x, hbx.y, hbx.w, hbx.h)) continue;
+          if (D.invulnerable) { this.nearMiss(A, D); continue; }
+          if (found.some((h) => h.A === A && h.D === D)) continue;
+          found.push({ A, D, hb, cx, cy, dirX: A.facing });
         }
-        if (A.state !== 'attack' || !A.atk) break;
       }
     }
+    for (const h of found) {
+      const { A, D, hb } = h;
+      if (!D.alive || D.invulnerable) continue;
+      const set = A.hitGroups[hb.group] || (A.hitGroups[hb.group] = new Set());
+      if (set.has(D.id)) continue;
+      set.add(D.id);
+      this.applyHit(A, D, hb, { cx: h.cx, cy: h.cy, dirX: h.dirX });
+    }
+  }
+
+  // esquiva perfecta: un golpe atraviesa a quien está esquivando
+  nearMiss(A, D) {
+    if (D.state !== 'dash' || this.tick - (D.lastDodgeFx || -99) < 40) return;
+    D.lastDodgeFx = this.tick;
+    FX.text(D.rx, D.y - 120, 'ESQUIVA', '#ffffff', 22, 34);
+    FX.ring(D.rx, D.y - 45, D.color, 54, 12, 3);
+    D.ghostAt();
+    Sfx.play('tech');
   }
 
   applyHit(A, D, hb, info) {
@@ -231,13 +271,20 @@ class Match {
 
     const power = clamp(kb / 10, 0.35, 2.2);
     const hs = Math.round(hb.hs || 3 + dmg * 0.45);
+    // altura del impacto sobre el cuerpo (0 = pies, 1 = cabeza): decide la reacción
+    const hitH = clamp((D.y - info.cy) / D.h, 0, 1);
+    { const L = Math.hypot(kx, ky) || 1; info.kux = kx / L; info.kuy = ky / L; }
+    // el atacante acompaña el golpe con el cuerpo
+    if (!info.projectile && A.alive && A.state === 'attack') { A.pose.vel.t += 3 + power * 3; A.pose.vel.sq += 0.02 * power; }
 
     // armadura: aguanta sin salir volando
     if (D.armored && kb < 15) {
       A.hitstop = Math.ceil(hs * 0.7); D.hitstop = Math.ceil(hs * 0.7); D.victim = true; A.victim = false;
       D.flash = 4;
-      this.hitFx(A, D, hb, info, power * 0.6, dmg);
-      FX.text(D.rx, D.y - 120, 'ARMADURA', D.color, 20, 30);
+      this.fxOnce('a' + this.tick + ':' + A.id + ':' + D.id, () => {
+        this.hitFx(A, D, hb, info, power * 0.6, dmg);
+        FX.text(D.rx, D.y - 120, 'ARMADURA', D.color, 20, 30);
+      });
       if (D.hp <= 0) this.ko(D, A, kx, ky);
       return true;
     }
@@ -246,8 +293,12 @@ class Match {
     const stun = Math.round(clamp(kb * (hb.stun || 2.5), 12, 75) * decay);
     const tumble = tumbleHit;
     A.hitstop = hs; D.hitstop = hs; D.victim = true; A.victim = false;
-    D.takeHit(kx, ky, stun, tumble);
+    D.takeHit(kx, ky, stun, tumble, hitH);
     D.lastAttacker = A;
+    // fotograma de impacto: solo golpes muy fuertes o letales, nunca seguidos
+    if ((power >= 1.35 || D.hp <= 0) && this.tick - (this.lastImpact || -99) > 30) {
+      this.lastImpact = this.tick; this.impact = { ids: [A.id, D.id], t0: null };
+    }
 
     D.comboHits++; D.comboDmg += dmg;
     if (D.comboHits >= 2) {
@@ -256,7 +307,7 @@ class Match {
     }
     if (this.mode === 'training') this.lastCombo = { hits: D.comboHits, dmg: D.comboDmg };
 
-    this.hitFx(A, D, hb, info, power, dmg);
+    this.fxOnce('h' + this.tick + ':' + A.id + ':' + D.id, () => this.hitFx(A, D, hb, info, power, dmg));
     if (A.atk && A.atk.onHit && !info.projectile) A.atk.onHit(A, D, this);
     if (D.hp <= 0) this.ko(D, A, kx, ky);
     return true;
@@ -266,13 +317,21 @@ class Match {
     const hbx = D.hurtbox();
     const px = clamp(info.cx, hbx.x, hbx.x + hbx.w), py = clamp(info.cy, hbx.y, hbx.y + hbx.h);
     const ang = (hb.a || 0) * DEG;
-    FX.sparks(px, py, Math.cos(ang) * (info.dirX || 1), -Math.sin(ang), A.color, Math.round(6 + power * 6), 0.7 + power * 0.35);
-    FX.hitFlash(px, py, A.color, 0.55 + power * 0.35);
+    const ux = info.kux != null ? info.kux : Math.cos(ang) * (info.dirX || 1), uy = info.kuy != null ? info.kuy : -Math.sin(ang);
+    FX.sparks(px, py, ux, uy, A.color, Math.round(4 + power * 5), 0.7 + power * 0.35);
+    FX.hitFlash(px, py, A.color, 0.5 + power * 0.32);
+    // forma del impacto según el arma: tajo afilado o estallido contundente
+    const wt = A.char.weapon.type;
+    const cut = !info.projectile && (wt === 'katana' || wt === 'daggers' || wt === 'spear') && hb.sfx !== 'hit';
+    if (cut) FX.streak(px, py, Math.atan2(uy, ux) + Math.PI / 2 + (A.hurtVar || 0) * 0.4, 60 + power * 34, 5 + power * 3, A.color);
+    else FX.burst(px, py, 18 + power * 16, A.color, Math.atan2(uy, ux));
+    // la cámara recibe el golpe en su dirección
+    this.kick(ux * (4 + power * 7), uy * (4 + power * 7));
     if (power > 1.05) {
       FX.impactLines(px, py, A.color, 16, 0.6 + power * 0.35);
       this.punch(0.035 * power);
-      this.shake(0.22 + power * 0.16);
-    } else this.shake(0.08 + power * 0.08);
+      this.shake(0.16 + power * 0.12);
+    } else this.shake(0.05 + power * 0.06);
     if (hb.fx === 'zap') for (let i = 0; i < 3; i++) FX.bolt(px, py, px + rand(-60, 60), py + rand(-60, 60), A.color, 8, 2.5);
     if (hb.fx === 'iaido') FX.slashArc(px, py, 56, -2.4, 0.6, '#ffffff', 12, 8);
     Sfx.play(hb.sfx || 'hit', hb.p || power);
@@ -282,12 +341,14 @@ class Match {
   }
 
   triggerCounter(D, A) {
-    Sfx.play('parry');
-    FX.hitFlash(D.x, D.y - 50, '#ffffff', 1.6);
-    FX.impactLines(D.x, D.y - 50, '#ffffff', 22, 1.3);
-    FX.text(D.x, D.y - 130, '¡CONTRA!', '#ffffff', 34, 50);
+    this.fxOnce('c' + this.tick + ':' + D.id, () => {
+      Sfx.play('parry');
+      FX.hitFlash(D.x, D.y - 50, '#ffffff', 1.6);
+      FX.impactLines(D.x, D.y - 50, '#ffffff', 22, 1.3);
+      FX.text(D.x, D.y - 130, '¡CONTRA!', '#ffffff', 34, 50);
+      this.punch(0.12); this.shake(0.4);
+    });
     this.slowmo(0.3, 34);
-    this.punch(0.12); this.shake(0.4);
     // el atacante se queda aturdido
     A.takeHit(0, 0, 26, false);
     A.hitstop = 10; A.victim = true; A.pendingKB = { kx: 0, ky: 0 };
@@ -305,11 +366,13 @@ class Match {
     const last = new Set(this.fighters.filter((F) => F.alive && F !== D).map((F) => F.team)).size <= 1;
     D.die(kx * 1.25, ky * 1.25 - 2, this, false);
     if (A) A.stats.kos++;
-    Sfx.play('ko');
-    this.screenFlash = 0.8;
-    this.shake(0.7); this.punch(0.14);
-    FX.impactLines(D.x, D.y - 50, '#ffffff', 26, 1.6);
-    FX.hitFlash(D.x, D.y - 50, D.color, 2);
+    this.fxOnce('k' + this.tick + ':' + D.id, () => {
+      Sfx.play('ko');
+      this.screenFlash = 0.8;
+      this.shake(0.7); this.punch(0.14);
+      FX.impactLines(D.x, D.y - 50, '#ffffff', 26, 1.6);
+      FX.hitFlash(D.x, D.y - 50, D.color, 2);
+    });
     if (this.mode !== 'training') {
       if (last && this.mode !== 'attract') { this.slowmo(0.18, 70); this.focus = D; this.showBanner('K.O.', 90, '#ff3b4e'); }
       else this.slowmo(0.4, 24);
@@ -325,12 +388,14 @@ class Match {
         if (F.x < b.x) nx = -1; else if (F.x > b.x + b.w) nx = 1;
         if (F.y < b.y) ny = -1; else if (F.y > b.y + b.h) ny = 1;
         // la explosión aparece en el borde visible de la cámara
-        const v = this.viewRect();
-        const ex = clamp(F.x, v.x + 20, v.x + v.w - 20), ey = clamp(F.y - 40, v.y + 20, v.y + v.h - 20);
-        FX.blast(ex, ey, nx, ny, F.color);
-        Sfx.play('boom', 1.3);
-        this.shake(0.7);
-        this.screenFlash = 0.5;
+        this.fxOnce('b' + this.tick + ':' + F.id, () => {
+          const v = this.viewRect();
+          const ex = clamp(F.x, v.x + 20, v.x + v.w - 20), ey = clamp(F.y - 40, v.y + 20, v.y + v.h - 20);
+          FX.blast(ex, ey, nx, ny, F.color);
+          Sfx.play('boom', 1.3);
+          this.shake(0.7);
+          this.screenFlash = 0.5;
+        });
         const killer = F.lastAttacker;
         if (killer && killer !== F) killer.stats.kos++;
         const last = new Set(this.fighters.filter((Q) => Q.alive && Q !== F).map((Q) => Q.team)).size <= 1;
@@ -426,11 +491,13 @@ class Match {
   }
   explode(p) {
     const e = p.explode;
-    Sfx.play('boom', 0.7);
-    FX.hitFlash(p.x, p.y, p.owner.color, 1.4);
-    FX.ring(p.x, p.y, p.owner.color, e.r * 1.4, 16, 5);
-    FX.sparks(p.x, p.y, 0, -1, p.owner.color, 16, 1.1);
-    this.shake(0.3);
+    this.fxOnce('e' + this.tick + ':' + Math.round(p.x) + ':' + Math.round(p.y), () => {
+      Sfx.play('boom', 0.7);
+      FX.hitFlash(p.x, p.y, p.owner.color, 1.4);
+      FX.ring(p.x, p.y, p.owner.color, e.r * 1.4, 16, 5);
+      FX.sparks(p.x, p.y, 0, -1, p.owner.color, 16, 1.1);
+      this.shake(0.3);
+    });
     for (const D of this.fighters) {
       if (D === p.owner || !D.alive || D.team === p.owner.team || D.invulnerable) continue;
       if (!circleRect(p.x, p.y, e.r, ...Object.values(D.hurtbox()))) continue;
@@ -446,13 +513,15 @@ class Match {
         let gy = this.stage.blast.y + this.stage.blast.h;
         for (const p of this.stage.solids) if (s.x > p.x && s.x < p.x + p.w && p.y < gy) gy = p.y;
         s.gy = gy;
-        Sfx.play('zap');
-        FX.bolt(s.x + rand(-20, 20), this.cam.y - 900, s.x, gy, s.owner.color, 14, 9);
-        FX.bolt(s.x + rand(-30, 30), this.cam.y - 900, s.x, gy, '#ffffff', 10, 4);
-        FX.hitFlash(s.x, gy - 20, s.owner.color, 1.6);
-        FX.ring(s.x, gy, s.owner.color, 90, 16, 5);
-        FX.debris(s.x, gy, '#ffffff', 8, 1);
-        this.shake(0.45); this.screenFlash = Math.max(this.screenFlash, 0.25);
+        this.fxOnce('z' + this.tick + ':' + Math.round(s.x), () => {
+          Sfx.play('zap');
+          FX.bolt(s.x + rand(-20, 20), this.cam.y - 900, s.x, gy, s.owner.color, 14, 9);
+          FX.bolt(s.x + rand(-30, 30), this.cam.y - 900, s.x, gy, '#ffffff', 10, 4);
+          FX.hitFlash(s.x, gy - 20, s.owner.color, 1.6);
+          FX.ring(s.x, gy, s.owner.color, 90, 16, 5);
+          FX.debris(s.x, gy, '#ffffff', 8, 1);
+          this.shake(0.45); this.screenFlash = Math.max(this.screenFlash, 0.25);
+        });
         for (const D of this.fighters) {
           if (D === s.owner || !D.alive || D.team === s.owner.team || D.invulnerable) continue;
           const h = D.hurtbox();
@@ -474,6 +543,8 @@ class Match {
         if (v === null || t === 'number' || t === 'boolean' || t === 'string') o[k] = v;
       }
       o.poseCur = Object.assign({}, F.pose.cur); o.poseVel = Object.assign({}, F.pose.vel);
+      // la pose objetivo también es estado: startAttack/takeHit la leen (unwrap)
+      o.poseTgt = Object.assign({}, F.target);
       o.J = JOINT_NAMES.flatMap((n) => [F.J[n].x, F.J[n].y]); o.Jx = [F.J.f, F.J.s, F.J.headAng, F.J.wAng];
       o.cd = Object.assign({}, F.cd); o.buf = Object.assign({}, F.buf);
       o.atk = F.atk ? { name: F.atk.name, hasHit: !!F.atk.hasHit } : null;
@@ -498,11 +569,17 @@ class Match {
     return {
       tick: this.tick, phase: this.phase, phaseT: this.phaseT, round: this.round, slowT: this.slowT, slowScale: this.slowScale,
       roundWinner: this.roundWinner ? this.roundWinner.id : -1, rng: this.rng.s,
+      cam: Object.assign({}, this.cam),
       stage: { time: this.stage.time, plats: plats.map((p) => [p.x, p.y, p.prevY, p.dx, p.dy]) },
       fighters, projectiles, strikes,
     };
   }
-  loadState(S) {
+  // opts.rollback: volver atrás unos ticks en el online. Se conserva lo
+  // puramente visual (ragdolls, telas, estelas, fantasmas) para que la
+  // corrección no se note.
+  loadState(S, opts = {}) {
+    const soft = !!opts.rollback;
+    if (S.cam) Object.assign(this.cam, S.cam);
     this.tick = S.tick; this.phase = S.phase; this.phaseT = S.phaseT; this.round = S.round;
     this.slowT = S.slowT; this.slowScale = S.slowScale; this.rng.s = S.rng;
     this.roundWinner = S.roundWinner >= 0 ? this.fighters[S.roundWinner] : null;
@@ -515,6 +592,7 @@ class Match {
         F[k] = o[k];
       }
       Object.assign(F.pose.cur, o.poseCur); Object.assign(F.pose.vel, o.poseVel);
+      if (o.poseTgt) Object.assign(F.target, o.poseTgt);
       JOINT_NAMES.forEach((n, j) => { F.J[n].x = o.J[j * 2]; F.J[n].y = o.J[j * 2 + 1]; });
       [F.J.f, F.J.s, F.J.headAng, F.J.wAng] = o.Jx;
       copyJoints(F.Jprev, F.J);
@@ -527,13 +605,20 @@ class Match {
       F.lastAttacker = o.lastAttacker >= 0 ? this.fighters[o.lastAttacker] : null;
       F.pendingKB = o.pendingKB; F.dashDir = o.dashDir; F.stats = o.stats;
       Object.assign(F.ctrl.held, o.held); Object.assign(F.ctrl.pressed, o.pressed);
-      if (!F.alive) F.rag = null;
-      F.chains.forEach((c) => (c.init = false));
-      F.ghosts.length = 0;
+      if (soft) {
+        // vivo en el estado cargado: guarda su ragdoll por si vuelve a caer en el mismo tick
+        if (F.alive) { if (F.rag) F.ragKeep = F.rag; F.rag = null; }
+      } else {
+        if (!F.alive) F.rag = null;
+        F.chains.forEach((c) => (c.init = false));
+        F.ghosts.length = 0;
+      }
     });
-    this.projectiles = S.projectiles.map((o) => {
+    const oldP = this.projectiles;
+    this.projectiles = S.projectiles.map((o, i) => {
       const p = new Projectile(this.fighters[o.owner], {});
-      Object.assign(p, o, { owner: this.fighters[o.owner], hitIds: new Set(o.hitIds), trail: [] });
+      const prev = soft && oldP[i] && oldP[i].kind === o.kind && oldP[i].owner.id === o.owner ? oldP[i].trail : [];
+      Object.assign(p, o, { owner: this.fighters[o.owner], hitIds: new Set(o.hitIds), trail: prev });
       return p;
     });
     this.strikes = S.strikes.map((s) => Object.assign({}, s, { owner: this.fighters[s.owner] }));
@@ -593,6 +678,10 @@ class Match {
     const tr = c.trauma * c.trauma;
     const t = this.tick * 0.9;
     c.sx = 30 * tr * noise1(t); c.sy = 30 * tr * noise1(t + 50); c.rot = 0.035 * tr * noise1(t + 99);
+    // empujón direccional: vuelve con un pequeño rebote
+    c.kvx = ((c.kvx || 0) - (c.kx || 0) * 0.32) * 0.62; c.kvy = ((c.kvy || 0) - (c.ky || 0) * 0.32) * 0.62;
+    c.kx = (c.kx || 0) + c.kvx; c.ky = (c.ky || 0) + c.kvy;
+    c.sx += c.kx; c.sy += c.ky;
   }
 
   // ═══════════════════ DIBUJO ═══════════════════
@@ -638,6 +727,25 @@ class Match {
     for (const F of this.fighters) if (F.alive) F.draw(ctx, alpha, this);
     this.drawProjectiles(ctx, alpha);
     FX.draw(ctx);
+    // fotograma de impacto: todo se oscurece y los dos implicados quedan en blanco
+    // (dura ~70 ms reales, también en cámara lenta)
+    const imp = this.impact;
+    if (imp && Settings.shake > 0) {
+      const now = performance.now();
+      if (imp.t0 == null) imp.t0 = now;
+      const u = (now - imp.t0) / 70;
+      if (u >= 1) this.impact = null;
+      else {
+        const v = this.viewRect(), pad = 400;
+        ctx.fillStyle = `rgba(6,6,12,${0.62 * (1 - u * 0.5)})`;
+        ctx.fillRect(v.x - pad, v.y - pad, v.w + pad * 2, v.h + pad * 2);
+        for (const id of imp.ids) {
+          const F = this.fighters[id];
+          if (!F) continue;
+          const fl = F.flash; F.flash = 1; F.draw(ctx, alpha, this); F.flash = fl;
+        }
+      }
+    }
     if (this.mode !== 'attract' && this.mode !== 'showcase') for (const F of this.fighters) F.drawTag(ctx, alpha, z);
     FX.drawTexts(ctx);
     if (this.debug) this.drawDebug(ctx);

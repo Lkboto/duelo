@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Duelo · mediciones de animación</title>
+<style>
+  body { background: #0b0b12; color: #e8e6e3; font: 14px/1.4 system-ui, sans-serif; margin: 24px; }
+  pre { background: #14141e; padding: 12px; }
+</style>
+</head>
+<body>
+<h1>Mediciones de animación y combate</h1>
+<p><button id="go">Medir</button></p>
+<pre id="out"></pre>
+<script src="../js/util.js"></script>
+<script src="../js/audio.js"></script>
+<script src="../js/input.js"></script>
+<script src="../js/fx.js"></script>
+<script src="../js/skeleton.js"></script>
+<script src="../js/characters.js"></script>
+<script src="../js/stages.js"></script>
+<script src="../js/fighter.js"></script>
+<script src="../js/ai.js"></script>
+<script src="../js/game.js"></script>
+<script src="../js/showcase.js"></script>
+<script src="anim.js"></script>
+<script>
+  document.getElementById('go').onclick = () => {
+    const s = AnimTest.syncAll();
+    const r = { sync: { moves: s.moves, syncPct: s.syncPct, avgGap: s.avgGap, firstFrameMisses: s.firstFrameMisses }, pops: AnimTest.pops(), perf: AnimTest.perf() };
+    document.getElementById('out').textContent = JSON.stringify(r, null, 2) + '\n\n' + s.rows.map((x) => `${x.move.padEnd(22)} sync ${String(x.sync).padStart(3)}%  gap ${x.gap}  first ${x.first}`).join('\n');
+    window.lastResults = r;
+  };
+</script>
+</body>
+</html>

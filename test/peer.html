@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><title>Duelo · prueba WebRTC</title></head>
+<body style="background:#0b0b12;color:#e8e6e3;font:14px system-ui">
+<pre id="out">conectando…</pre>
+<!-- Abre una sala y se une a ella desde la misma página con PeerJS real:
+     comprueba los dos canales (main ordenado y fast sin orden) y el ping. -->
+<script src="../js/vendor/peerjs.min.js"></script>
+<script src="../js/util.js"></script>
+<script src="../js/net.js"></script>
+<script>
+(async () => {
+  const out = document.getElementById('out');
+  const log = (s) => (out.textContent += '\n' + s);
+  const code = randomCode();
+  const H = new PeerTransport(), G = new PeerTransport();
+  const got = { H: [], G: [] };
+  H.onmessage = (m) => got.H.push(m); G.onmessage = (m) => got.G.push(m);
+  await H.host(code); log('sala creada ' + code);
+  await G.join(code); log('unido');
+  for (let i = 0; i < 40 && !(G.fast && G.fast.open && H.fast && H.fast.open); i++) await new Promise((r) => setTimeout(r, 100));
+  const res = { mainOpen: !!(G.conn && G.conn.open), fastOpen: !!(G.fast && G.fast.open && H.fast && H.fast.open),
+    fastLabel: H.fast && H.fast.label, fastReliable: G.fast && G.fast.reliable };
+  // 'i' por el canal rápido, 'sel' por el principal
+  const t0 = performance.now();
+  for (let k = 0; k < 50; k++) G.send({ t: 'i', k, m: [k] });
+  G.send({ t: 'sel', cursor: 3 });
+  H.send({ t: 'ping', ts: t0 });
+  await new Promise((r) => setTimeout(r, 1500));
+  res.inputsReceived = got.H.filter((m) => m.t === 'i').length;
+  res.selReceived = got.H.some((m) => m.t === 'sel');
+  res.pingReceived = got.G.some((m) => m.t === 'ping');
+  H.close(); G.close();
+  window.peerResult = res;
+  log(JSON.stringify(res, null, 1));
+})().catch((e) => { window.peerResult = { error: String(e && (e.message || e.type) || e) }; document.getElementById('out').textContent += '\nERROR ' + JSON.stringify(window.peerResult); });
+</script>
+</body>
+</html>

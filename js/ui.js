@@ -628,8 +628,9 @@ const UI = {
       return p;
     });
     if (S.mode === 'online') {
-      const delay = Net.suggestDelay();
-      const cfg = { seed: (Math.random() * 4294967296) >>> 0, stage: stageId, firstTo: S.firstTo, chars: players.map((p) => p.charId), delay };
+      const win = Net.params().window;
+      const delay = Net.suggestDelay(win);
+      const cfg = { seed: (Math.random() * 4294967296) >>> 0, stage: stageId, firstTo: S.firstTo, chars: players.map((p) => p.charId), delay, window: win };
       Net.send({ t: 'start', cfg });
       // el anfitrión arranca medio ping después para ir a la par que el invitado
       setTimeout(() => App.startOnline(cfg), Math.min(250, (Net.rtt || 0) / 2));

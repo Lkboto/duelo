@@ -41,7 +41,8 @@ En **Movimientos** tienes la lista completa y tres combos verificados de cada un
 - La lógica corre a 60 Hz fijos y el dibujo se interpola a la frecuencia de tu pantalla (fluido a 120/144 Hz y en cámara lenta).
 - Animación procedural: esqueleto con cinemática directa e IK, poses por keyframes suavizadas con muelles, telas con verlet y ragdoll en los K.O.
 - Sonido sintetizado con WebAudio (no hay archivos de audio).
-- Online 1 contra 1 por WebRTC ([PeerJS](https://peerjs.com/), MIT): las dos partidas simulan lo mismo con la misma semilla e intercambian solo las teclas, con un retardo de entrada ajustado al ping y resincronización automática si algo se desvía.
+- Online 1 contra 1 por WebRTC ([PeerJS](https://peerjs.com/), MIT) con **rollback**: las dos partidas simulan lo mismo con la misma semilla e intercambian solo las teclas. Tus entradas se aplican con solo 2 ticks de retardo (33 ms); si la tecla del rival aún no ha llegado se predice, y cuando llega se corrige volviendo atrás y resimulando (hasta 8 ticks). Las entradas viajan redundantes por un canal no ordenado (una pérdida no frena nada), los dos clientes ajustan su ritmo para ir a la par y, si el estado llegara a desviarse, el anfitrión lo resincroniza.
+- Cada golpe se aplica con el estado de todos a la vez: si dos golpes conectan en el mismo tick, se intercambian.
 - Fuentes: Bebas Neue y Barlow Condensed (SIL Open Font License).
 
 ### Estructura
@@ -64,4 +65,15 @@ js/showcase.js    previsualizaciones de la selección
 js/net.js         online
 js/ui.js          menús
 js/main.js        bucle principal
+test/             pruebas y mediciones (ver abajo)
 ```
+
+### Pruebas y mediciones
+
+Arranca el servidor de desarrollo (sin caché) con `python test/serve.py` y abre:
+
+- `test/anim.html`: sincronía arma/caja de golpe, deslizamiento de los pies, intercambio de golpes y rendimiento.
+- `test/netsim.html`: dos clientes simulados con reloj virtual y red con latencia, jitter y pérdida. `NetSim.runAll({ window: 8 })` (rollback) o `{ window: 0 }` (lockstep); `NetSim.rollbackCheck()` comprueba que volver atrás y resimular da exactamente el mismo estado.
+- `test/duo.html?lag=60&jitter=25&loss=0.02&rollback=1&secs=30`: dos partidas reales conectadas entre sí. Para ejecutarla sin ventana: `node test/run-duo.mjs "lag=60&jitter=25&loss=0.02&secs=30"`.
+
+Para probar el online a mano entre dos pestañas: `index.html?net=local&lag=80&jitter=20&loss=0.02` en ambas (`&rollback=0` para lockstep puro).

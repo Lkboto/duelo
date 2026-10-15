@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Duelo · dos clientes</title>
+<style>
+  body { margin: 0; background: #0b0b12; color: #e8e6e3; font: 13px/1.4 system-ui, sans-serif; }
+  .row { display: flex; gap: 4px; }
+  iframe { width: 50%; height: 60vh; border: 0; }
+  pre { margin: 6px 10px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<!--
+  Dos partidas completas (cada una con su bucle, su red y sus temporizadores
+  reales) conectadas entre sí por BroadcastChannel con latencia, jitter y
+  pérdida simulados. Las controlan bots. Uso:
+    test/duo.html?lag=60&jitter=20&loss=0.02&rollback=1&secs=40
+-->
+<div class="row"><iframe id="A"></iframe><iframe id="B"></iframe></div>
+<pre id="out">preparando…</pre>
+<script>
+const q = new URLSearchParams(location.search);
+const lag = +(q.get('lag') || 40), jitter = +(q.get('jitter') || 10), loss = +(q.get('loss') || 0);
+const rb = q.get('rollback') !== '0', secs = +(q.get('secs') || 30);
+const src = `../index.html?net=local&lag=${lag}&jitter=${jitter}&loss=${loss}&rollback=${rb ? 1 : 0}`;
+const out = document.getElementById('out');
+const frames = [document.getElementById('A'), document.getElementById('B')];
+frames.forEach((f) => (f.src = src));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// las constantes globales del juego no cuelgan de window: se leen con eval en cada iframe
+const G_ = (w) => {
+  const g = { performance: w.performance };
+  for (const n of ['App', 'Net', 'Input', 'Bot', 'Controller', 'RNG', 'UI', 'ACTIONS', 'ROLLBACK_WINDOW']) {
+    try { g[n] = w.eval(n); } catch (e) { g[n] = undefined; }
+  }
+  return g.App ? g : null;
+};
+const ready = (w) => { const g = G_(w); return g && g.App.canvas && g.Net; };
+
+function instrument(w, me, stats) {
+  // bot que decide las entradas del luchador propio
+  let bot = null, shadow = null, ctrl = null;
+  w.Input.read = (srcName, o) => {
+    const m = w.App.match;
+    if (m && !bot) {
+      ctrl = new w.Controller('bot');
+      const F = m.fighters[me];
+      shadow = Object.create(F, { ctrl: { value: ctrl, writable: true } });
+      bot = new w.Bot(shadow, 'hard', new w.RNG(11 + me));
+    }
+    for (const a of w.ACTIONS) { o.held[a] = false; o.pressed[a] = false; }
+    if (bot && m) { bot.F = shadow; bot.update(m); for (const a of w.ACTIONS) { o.held[a] = ctrl.held[a]; o.pressed[a] = ctrl.pressed[a]; } }
+    return o;
+  };
+  // métricas del bucle real
+  const step = w.Net.step.bind(w.Net);
+  let last = null, simMs = 0;
+  w.Net.step = (m, dt) => {
+    const before = m.tick, sl = 1000 / 60 / m.timeScale;
+    const t0 = w.performance.now();
+    const a = step(m, dt);
+    stats.cpu.push(w.performance.now() - t0);
+    simMs += (m.tick - before) * sl;
+    const P = simMs + a * sl;
+    if (last != null && stats.on) {
+      stats.frames++;
+      if (Math.abs((P - last) - dt * 1000) > 5) stats.jerks++;
+      if (w.Net.stall > 0 && m.tick === before) stats.stalls++;
+    }
+    last = P;
+    return a;
+  };
+  const fh = w.Net.finalHash ? w.Net.finalHash.bind(w.Net) : null;
+  if (fh) w.Net.finalHash = (k, h) => { stats.finals.set(k, h); return fh(k, h); };
+  else stats.legacy = w.Net;
+  const render = w.App.render.bind(w.App);
+  w.App.render = () => { const t0 = w.performance.now(); render(); stats.draw.push(w.performance.now() - t0); };
+}
+
+(async () => {
+  while (!frames.every((f) => f.contentWindow && ready(f.contentWindow))) await sleep(100);
+  await sleep(500);
+  const [H, G] = frames.map((f) => G_(f.contentWindow));
+  const stats = [0, 1].map(() => ({ frames: 0, jerks: 0, stalls: 0, finals: new Map(), cpu: [], draw: [], on: false }));
+  instrument(H, 0, stats[0]); instrument(G, 1, stats[1]);
+  const win = rb && H.ROLLBACK_WINDOW ? H.ROLLBACK_WINDOW : 0;
+  let cfg;
+  if (q.get('ui') === '1') {
+    // flujo completo por la interfaz: crear sala, unirse, elegir, escenario y empezar
+    const doc = (g) => g.App.canvas.ownerDocument;
+    H.UI.show('online'); G.UI.show('online');
+    await H.UI.onlineHost();
+    doc(G).getElementById('code-in').value = H.Net.code;
+    await G.UI.onlineJoin();
+    for (let i = 0; i < 100 && !(H.UI.cur === 'select' && G.UI.cur === 'select'); i++) await sleep(100);
+    if (H.UI.cur !== 'select' || G.UI.cur !== 'select') throw new Error('no llegaron a la selección: ' + H.UI.cur + ' / ' + G.UI.cur);
+    out.textContent = 'en la selección, midiendo ping…';
+    await sleep(2500);
+    [['kaze', H], ['toro', G]].forEach(([id, g]) => {
+      const me = g.UI.sel.slots.find((s) => s.net === 'me');
+      me.charId = id; me.locked = true;
+      g.UI.sendSel(); g.UI.selectChanged && g.UI.selectChanged();
+    });
+    await sleep(800);
+    H.UI.sel.firstTo = 99; H.UI.sel.stage = 'dojo';
+    H.UI.startFromSelect();
+    for (let i = 0; i < 50 && !(H.App.match && G.App.match); i++) await sleep(100);
+    if (!H.App.match || !G.App.match) throw new Error('la partida no empezó en los dos');
+    cfg = { delay: H.Net.delay, window: H.Net.window };
+  } else {
+    const code = await H.Net.create();
+    await G.Net.join(code);
+    out.textContent = 'conectados, midiendo ping…';
+    await sleep(2500);
+    cfg = { seed: 4242, stage: 'dojo', firstTo: 99, chars: ['kaze', 'toro'], delay: H.Net.suggestDelay(win), window: win };
+    for (const g of [H, G]) if (!g.UI.sel) g.UI.sel = {};   // sin pasar por la pantalla de selección
+    H.App.startOnline(cfg); G.App.startOnline(cfg);
+  }
+  await sleep(2000);
+  stats.forEach((s) => (s.on = true));
+  const t0 = performance.now();
+  while (performance.now() - t0 < secs * 1000) {
+    await sleep(500);
+    out.textContent = `midiendo… ${Math.round((performance.now() - t0) / 1000)} / ${secs} s · ticks ${H.App.match.tick} / ${G.App.match.tick}`;
+  }
+  stats.forEach((s) => (s.on = false));
+  // versión antigua (sin finalHash): sus huellas guardadas cada 30 ticks
+  for (const s of stats) if (s.legacy) for (const [k, h] of s.legacy.myHash) s.finals.set(k, h);
+  let compared = 0, diff = 0;
+  for (const [k, h] of stats[0].finals) if (stats[1].finals.has(k)) { compared++; if (stats[1].finals.get(k) !== h) diff++; }
+  const q95 = (a) => { const b = [...a].sort((x, y) => x - y); return +b[Math.floor(b.length * 0.95)].toFixed(2); };
+  const avg = (a) => +(a.reduce((s, v) => s + v, 0) / a.length).toFixed(3);
+  const res = {
+    cond: { lag, jitter, loss, mode: rb ? 'rollback' : 'lockstep', delayTicks: cfg.delay, inputLagMs: Math.round(cfg.delay * 1000 / 60) },
+    ping: [Math.round(H.Net.rtt), Math.round(G.Net.rtt)],
+    clients: [H, G].map((w, i) => ({
+      frames: stats[i].frames, jerkPct: +(100 * stats[i].jerks / Math.max(1, stats[i].frames)).toFixed(2), stallFrames: stats[i].stalls,
+      rollbacks: w.Net.rollbackCount, maxRollback: w.Net.maxRollback, resyncs: w.Net.resyncs,
+      netCpuAvg: avg(stats[i].cpu), netCpuP95: q95(stats[i].cpu), drawAvg: avg(stats[i].draw), drawP95: q95(stats[i].draw),
+      hp: w.App.match.fighters.map((F) => Math.round(F.hp)).join('/'), tick: w.App.match.tick,
+    })),
+    hashCompared: compared, hashDiff: diff,
+  };
+  window.duoResult = res;
+  out.textContent = JSON.stringify(res, null, 2);
+})().catch((e) => { out.textContent = 'ERROR ' + (e.stack || e); window.duoResult = { error: String(e) }; });
+</script>
+</body>
+</html>

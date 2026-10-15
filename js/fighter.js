@@ -361,6 +361,9 @@ class Fighter {
     if (name === 'skill1' || name === 'skill2') {
       const sk = this.char.skills.find((s) => s.key === name);
       this.cd[name] = sk ? sk.cd : 120;
+      // aviso de habilidad: destello del color del luchador (se ve venir el especial)
+      FX.ring(this.x, this.y - 48 * this.s, this.color, 58 * this.s, 12, 4);
+      FX.hitFlash(this.x, this.y - 48 * this.s, this.color, 0.45);
     }
     this.setState('attack');
     this.pose.unwrap(this.target);
@@ -559,20 +562,30 @@ class Fighter {
   }
 
   // ═══════════════════ GOLPES ═══════════════════
-  takeHit(kx, ky, stun, tumble) {
+  // hitH: altura del impacto (0 = pies, 1 = cabeza)
+  takeHit(kx, ky, stun, tumble, hitH = 0.6) {
     this.atk = null;
     this.setState(tumble ? 'tumble' : 'hurt');
-    this.hitstun = stun;
+    this.hitstun = stun; this.hurtLen = Math.max(1, stun);
     this.pendingKB = { kx, ky };
     this.vx = 0; this.vy = 0;
     this.fastFall = false; this.bounces = 0;
     this.spin = tumble ? sign(kx || 1) * clamp(Math.hypot(kx, ky) * 1.6, 12, 34) : 0;
     this.hurtVar = this.rng.range(-1, 1);
+    this.hurtH = hitH;
+    // golpe por la espalda: el cuerpo se va hacia delante en vez de hacia atrás
+    this.hurtBack = sign(kx) === this.facing ? 1 : 0;
+    this.hurtLaunch = ky < -6 ? 1 : 0;
+    const kl = Math.hypot(kx, ky) || 1;
+    this.kbx = kx / kl; this.kby = ky / kl;
     this.flash = 3;
     this.pose.unwrap(this.target);
-    // sacudida de la pose: se nota el impacto en el cuerpo
-    this.pose.vel.t -= 9 * sign(kx * this.facing || 1);
-    this.pose.vel.n -= 10;
+    // sacudida de la pose: el impacto recorre el cuerpo según dónde pega
+    const back = this.hurtBack ? -1 : 1;
+    const f = clamp(kl / 8, 0.6, 1.8);
+    this.pose.vel.t -= (hitH > 0.4 ? 10 : 4) * back * f;
+    this.pose.vel.n -= (hitH > 0.72 ? 16 : 7) * back * f;
+    if (hitH < 0.4) { this.pose.vel.kf += 14 * f; this.pose.vel.lf -= 10 * f; }
   }
 
   die(kx, ky, G, ringout) {
@@ -581,8 +594,15 @@ class Fighter {
     this.hp = 0;
     this.atk = null;
     if (!ringout) {
-      this.rag = new Ragdoll(this.J, kx, ky, kx * 0.012 + rand(-0.03, 0.03));
-      copyJoints(this.ragPrev, this.rag.joints());
+      // al resimular (online) se reutiliza el ragdoll que ya se estaba viendo
+      const keep = this.ragKeep;
+      if (G && G.resim && keep && Math.abs(keep.bornTick - G.tick) <= 3) this.rag = keep;
+      else {
+        this.rag = new Ragdoll(this.J, kx, ky, kx * 0.012 + rand(-0.03, 0.03));
+        this.rag.bornTick = G ? G.tick : 0;
+        copyJoints(this.ragPrev, this.rag.joints());
+      }
+      this.ragKeep = null;
     }
   }
 
@@ -776,6 +796,16 @@ class Fighter {
         tp.lb = lerp(lerp(-14, -6, rise), -24, fall); tp.kb = lerp(lerp(40, 60, rise), 32, fall);
         tp.t += this.vx * this.facing * 1.1 - fall * 4;
         tp.af += fall * 18; tp.ab += fall * 30 + rise * 20; tp.eb += rise * 20;
+        // cerca del suelo al caer: estira las piernas y prepara el aterrizaje
+        if (this.vy > 3 && !this.fastFall && this.flipT === 0) {
+          const gd = this.groundBelow(G);
+          const reach = clamp(1 - (gd - 8) / (this.vy * 6 + 30), 0, 1);
+          if (reach > 0) {
+            tp.lf = lerp(tp.lf, 26, reach); tp.kf = lerp(tp.kf, 34, reach);
+            tp.lb = lerp(tp.lb, -14, reach); tp.kb = lerp(tp.kb, 26, reach);
+            tp.t += 6 * reach; tp.af += 14 * reach; tp.ab += 18 * reach;
+          }
+        }
         if (this.fastFall) { tp.lf = 6; tp.kf = 10; tp.lb = -8; tp.kb = 12; tp.t -= 6; tp.af += 30; tp.ab += 40; }
         if (this.flipT > 0) {
           const u = 1 - this.flipT / 20;
@@ -795,10 +825,7 @@ class Fighter {
         break;
       }
       case 'hurt': {
-        const v = this.hurtVar;
-        tp.t = -16 - Math.abs(v) * 10; tp.n = -18 + v * 8; tp.hx = -4;
-        tp.af = 30 + v * 30; tp.ef = 70; tp.ab = -40 - v * 20; tp.eb = 50;
-        tp.lf = this.onGround ? 24 : 30; tp.kf = this.onGround ? 40 : 50; tp.lb = -18; tp.kb = 36;
+        this.hurtPose(tp);
         k = 0.55; d = 0.6;
         break;
       }
@@ -818,9 +845,15 @@ class Fighter {
         break;
       }
       case 'getup': {
-        const u = this.stateTime / this.getupLen;
-        if (u < 0.45) { tp.rot = -50; tp.hy = 30; tp.lf = 70; tp.kf = 120; tp.t = 30; groundTarget = 0; }
-        k = 0.35; d = 0.65;
+        // se incorpora apoyando una mano: tumbado → agachado → de pie, sin saltos
+        const e = Ease.inOutQuad(clamp(this.stateTime / this.getupLen * 1.15, 0, 1));
+        tp.rot = -78 * (1 - e); tp.hy = 42 * (1 - e);
+        tp.lf = lerp(78, tp.lf, e); tp.kf = lerp(128, tp.kf, e);
+        tp.lb = lerp(-6, tp.lb, e); tp.kb = lerp(96, tp.kb, e);
+        tp.t = lerp(38, tp.t, e); tp.n = lerp(14, tp.n, e);
+        tp.af = lerp(-30, tp.af, e); tp.ef = lerp(20, tp.ef, e);
+        groundTarget = e > 0.55 ? 1 : 0;
+        k = 0.42; d = 0.68;
         break;
       }
     }
@@ -830,6 +863,7 @@ class Fighter {
       tp.w = tp.af + tp.ef + (wp.grip || 0) + (this.state === 'dash' ? -30 : 0);
       if (this.state === 'ground' && !this.crouching) tp.w = this.char.stance.w + (tp.af - this.char.stance.af) + (tp.ef - this.char.stance.ef);
     }
+    this.lastVx = this.vx;
     this.ground = approach(this.ground, groundTarget, 0.34);
     // giro de 3 fotogramas al cambiar de dirección (instantáneo al atacar o recibir)
     const snapTurn = this.state === 'attack' || this.state === 'hurt' || this.state === 'tumble' || this.state === 'down' || this.state === 'getup' || this.state === 'dash';
@@ -847,14 +881,57 @@ class Fighter {
   }
 
   runCycle(tp, sp) {
-    const prev = this.runPhase;
-    this.runPhase += Math.abs(this.vx) * 0.105;
-    this.runLegs(tp, clamp(sp, 0, 1.2), this.runPhase);
+    const prev = this.runPhase, spc = clamp(sp, 0, 1.2);
+    // la cadencia sale de la zancada: el pie de apoyo no patina sobre el suelo
+    const A = (18 + 26 * spc) * DEG;
+    // (factor medido con test/anim: el pie apoyado apenas se desliza)
+    const stride = 2 * (BONES.thigh + BONES.shin) * this.s * Math.sin(A) * 1.4;
+    this.runPhase += Math.abs(this.vx) * Math.PI / Math.max(16, stride);
+    this.runLegs(tp, spc, this.runPhase);
+    // inclinación al acelerar y al frenar
+    const acc = (this.vx - (this.lastVx || 0)) * this.facing;
+    tp.t += clamp(acc * 7, -10, 12);
     // pasos: sonido y polvo al apoyar
     if (Math.floor(prev / Math.PI) !== Math.floor(this.runPhase / Math.PI)) {
       Sfx.play('step');
+      this.pose.vel.sq -= 0.012 * spc;
       if (sp > 0.7 && Math.random() < 0.5) FX.dust(this.x - this.facing * 6, this.y, 1, 0.4, -this.facing);
     }
+  }
+
+  // reacción al golpe según dónde pega, de dónde viene y cuánto aturde
+  hurtPose(tp) {
+    const v = this.hurtVar, h = this.hurtH == null ? 0.6 : this.hurtH;
+    const back = this.hurtBack ? -1 : 1;
+    // recupera la guardia a medida que se acaba el aturdimiento
+    const rec = Ease.inQuad(clamp(1 - this.hitstun / (this.hurtLen || 20), 0, 1)) * 0.6;
+    const R = {};
+    if (this.hurtLaunch && !this.onGround) {
+      // lanzado hacia arriba: arco de espalda, piernas colgando
+      Object.assign(R, { t: -26 * back, n: -22 * back, af: 120 + v * 20, ef: 30, ab: -150, eb: 30, lf: -6, kf: 50, lb: -34, kb: 60, hx: 0 });
+    } else if (h > 0.72) {
+      // a la cabeza: latigazo del cuello y brazos que se abren
+      Object.assign(R, { t: -20 * back, n: -30 * back + v * 6, af: 60 + v * 25, ef: 40, ab: -70 - v * 15, eb: 40, lf: 26, kf: 46, lb: -20, kb: 40, hx: -4 * back });
+    } else if (h > 0.4) {
+      // al cuerpo: se dobla por la cintura
+      Object.assign(R, { t: 26 * back, n: 14 * back, af: 18 + v * 12, ef: 95, ab: 12, eb: 95, lf: 30, kf: 58, lb: -24, kb: 52, hx: -6 * back });
+    } else {
+      // a las piernas: pierde el apoyo y abre los brazos para no caer
+      Object.assign(R, { t: 12 * back, n: 4, af: 75 + v * 15, ef: 30, ab: -80, eb: 30, lf: -24, kf: 70, lb: 6, kb: 52, hx: -2 * back });
+    }
+    if (!this.onGround && !this.hurtLaunch) { R.lf += 8; R.kf += 12; }
+    for (const k in R) tp[k] = lerp(R[k], tp[k], rec);
+  }
+
+  // distancia al suelo justo debajo (para anticipar el aterrizaje)
+  groundBelow(G) {
+    let best = 9999;
+    for (const p of G.stage.plats) {
+      if (this.x < p.x || this.x > p.x + p.w || p.y < this.y - 2) continue;
+      if (p.oneWay && this.ctrl.held.down) continue;
+      best = Math.min(best, p.y - this.y);
+    }
+    return best;
   }
   runLegs(tp, sp, ph) {
     const A = 18 + 26 * sp;
@@ -936,11 +1013,19 @@ class Fighter {
       return;
     }
     const JR = lerpJoints(this.JR, this.Jprev, this.J, alpha);
+    // corrección del online: desliza suavemente hasta la posición corregida
+    if (this.visX || this.visY) {
+      for (const n of JOINT_NAMES) { JR[n].x += this.visX; JR[n].y += this.visY; }
+      this.visX *= 0.72; this.visY *= 0.72;
+      if (Math.abs(this.visX) < 0.3 && Math.abs(this.visY) < 0.3) { this.visX = 0; this.visY = 0; }
+    }
     // temblor durante el hitstop del que recibe
     if (this.hitstop > 0 && this.victim) {
-      const amp = Math.min(6, this.hitstop * 0.8);
-      const ox = (this.hitstop % 2 ? 1 : -1) * amp;
-      for (const n of JOINT_NAMES) JR[n].x += ox;
+      // vibra a lo largo de la dirección del golpe, más al principio
+      const amp = Math.min(7, this.hitstop * 0.9);
+      const sgn = this.hitstop % 2 ? 1 : -0.6;
+      const ux = this.kbx == null ? 1 : this.kbx, uy = this.kby || 0;
+      for (const n of JOINT_NAMES) { JR[n].x += ux * amp * sgn; JR[n].y += uy * amp * sgn * 0.6; }
     }
     // fantasmas (dash, cargas)
     for (const g of this.ghosts) {

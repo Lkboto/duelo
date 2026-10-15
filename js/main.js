@@ -85,7 +85,7 @@ const App = {
     const players = cfg.chars.map((charId, i) => ({ charId, source: 'net', slot: i, tag: tags[i], team: i }));
     UI.sel.lastPlayers = players;
     const m = this.startMatch({ mode: 'online', stage: cfg.stage, seed: cfg.seed, firstTo: cfg.firstTo, players });
-    Net.begin(m, me, cfg.delay);
+    Net.begin(m, me, cfg.delay, cfg.window != null ? cfg.window : ROLLBACK_WINDOW);
   },
 
   stopMatch() {
@@ -203,7 +203,8 @@ const App = {
     ctx.font = '600 14px "Barlow Condensed", sans-serif';
     ctx.textAlign = 'left'; ctx.fillStyle = 'rgba(255,255,255,0.55)';
     const ping = Net.rtt ? Math.round(Net.rtt) + ' ms' : '—';
-    ctx.fillText(`ONLINE · sala ${Net.code} · ping ${ping} · retardo ${Net.delay}${Net.resyncs ? ' · resinc. ' + Net.resyncs : ''}`, 16, 24);
+    const mode = Net.window > 0 ? `rollback ≤${Net.window}` : 'lockstep';
+    ctx.fillText(`ONLINE · sala ${Net.code} · ping ${ping} · retardo ${Net.delay} (${Math.round(Net.delay * 1000 / 60)} ms) · ${mode}${Net.resyncs ? ' · resinc. ' + Net.resyncs : ''}`, 16, 24);
     ctx.restore();
   },
 };
