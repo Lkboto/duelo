@@ -3,7 +3,7 @@
 
 import { CHARACTERS, CHARACTER_LIST } from './characters.js';
 import { Fighter, GROUND, STAGE_W } from './sim.js';
-import { drawFigure, hexA } from './render.js';
+import { drawFigure, hexA, BODY } from './render.js';
 import { controlName } from './input.js';
 
 const MOVE_KEYS = [['light', 'attacks'], ['heavy', 'attacks'], ['neutral', 'skills'], ['forward', 'skills'], ['down', 'skills']];
@@ -131,7 +131,7 @@ export class CharacterSelect {
       const id = this.shown(i);
       if (id !== s.shownId) {
         s.shownId = id;
-        s.fighter = id === 'random' ? null : new Fighter(CHARACTERS[id], 0);
+        s.fighter = id === 'random' ? null : new Fighter(CHARACTERS[id], i);
         if (s.fighter) { s.fighter.x = STAGE_W / 2; s.fighter.facing = i === 0 ? 1 : -1; }
         s.nextMove = 50;
         this.renderInfo(i, id);
@@ -160,6 +160,7 @@ export class CharacterSelect {
       </div>
       <div class="moves">
         <kbd>${k('light')}</kbd><span>${c.attacks.light.name}</span>
+        <kbd>↓+${k('light')}</kbd><span>Barrido</span>
         <kbd>${k('heavy')}</kbd><span>${c.attacks.heavy.name}</span>
         <kbd>${k('skill')}</kbd><span>${c.skills.neutral.name}</span>
         <kbd>${fwd}+${k('skill')}</kbd><span>${c.skills.forward.name}</span>
@@ -176,22 +177,26 @@ export class CharacterSelect {
       ctx.clearRect(0, 0, W, H);
       const f = s.fighter;
       const col = f ? f.color : '#8a8494';
-      const g = ctx.createRadialGradient(W / 2, H * 0.62, 10, W / 2, H * 0.62, W * 0.55);
+      const bg = ctx.createLinearGradient(0, 0, 0, H);
+      bg.addColorStop(0, '#d2d2d2'); bg.addColorStop(1, '#b6b6b6');
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, W, H);
+      const g = ctx.createRadialGradient(W / 2, H * 0.6, 10, W / 2, H * 0.6, W * 0.5);
       g.addColorStop(0, hexA(col, 0.35));
       g.addColorStop(1, hexA(col, 0));
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, W, H);
-      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.fillStyle = 'rgba(0,0,0,0.08)';
       ctx.fillRect(0, H - 26, W, 26);
 
       if (!f) {
         // Ruleta de siluetas para "aleatorio"
         const c = CHARACTER_LIST[Math.floor(this.t / 8) % CHARACTER_LIST.length];
-        const ghost = new Fighter({ ...c, color: '#5d566a' }, 0);
+        const ghost = new Fighter({ ...c, color: '#7a7a7a' }, i);
         ghost.x = STAGE_W / 2;
         ghost.facing = i === 0 ? 1 : -1;
         ghost.stateTime = this.t;
-        drawInto(ctx, ghost, this.t, W, H, 1.3);
+        drawInto(ctx, ghost, this.t, W, H, 1.3, { body: '#8c8c8c' });
         ctx.font = '72px "Bebas Neue", Impact, sans-serif';
         ctx.textAlign = 'center';
         ctx.lineWidth = 8; ctx.strokeStyle = '#17131c';
@@ -216,12 +221,12 @@ export class CharacterSelect {
   }
 }
 
-function drawInto(ctx, f, t, W, H, k) {
+function drawInto(ctx, f, t, W, H, k, opts = {}) {
   f.y = GROUND;
   ctx.save();
   ctx.translate(W / 2 - f.x * k, H - 20 - GROUND * k);
   ctx.scale(k, k);
-  drawFigure(ctx, f, t);
+  drawFigure(ctx, f, t, opts);
   ctx.restore();
 }
 
@@ -231,10 +236,12 @@ function drawPortrait(cv, def) {
   f.x = STAGE_W / 2;
   f.facing = 1;
   const g = ctx.createLinearGradient(0, 0, 0, cv.height);
-  g.addColorStop(0, hexA(def.color, 0.5));
-  g.addColorStop(1, hexA(def.color, 0.08));
+  g.addColorStop(0, '#d4d4d4');
+  g.addColorStop(1, '#b4b4b4');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.fillStyle = hexA(def.color, 0.85);
+  ctx.fillRect(0, cv.height - 8, cv.width, 8);
   ctx.save();
   const k = 1.15;
   ctx.translate(cv.width / 2 - f.x * k - 6, cv.height + 34 - GROUND * k);

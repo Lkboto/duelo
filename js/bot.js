@@ -39,7 +39,8 @@ export class Bot {
       oppState: opp.state,
       oppAttacking: opp.state === 'attack' && (ph === 'startup' || ph === 'active') && !opp.move?.counter,
       oppCountering: opp.state === 'attack' && !!opp.move?.counter,
-      oppStunned: opp.state === 'hitstun',
+      oppStunned: opp.state === 'hitstun' && !opp.knock,
+      oppDown: opp.state === 'down' || opp.state === 'getup' || (opp.state === 'hitstun' && opp.knock),
       oppRecovering: opp.state === 'attack' && ph === 'recovery',
       oppAir: !opp.grounded,
       dist: Math.abs(opp.x - me.x),
@@ -116,6 +117,13 @@ export class Bot {
       return;
     }
 
+    // Rival derribado: acercarse y esperar a que se levante
+    if (seen.oppDown) {
+      if (dist > lightRange + 20 && !ranged) this.setIntent('approach', { toward: true }, 8, null);
+      else this.setIntent('wait', {}, 8, null);
+      return;
+    }
+
     // No atacar a un rival que está contraatacando
     if (seen.oppCountering && dist < 200) {
       this.setIntent('wait', {}, 10, null);
@@ -129,6 +137,8 @@ export class Bot {
         this.setIntent('attack', {}, 8, 'heavy');
       } else if (ranged && this.rng() < 0.5) {
         this.setIntent('wait', {}, think, null);
+      } else if (!ranged && this.rng() < 0.35 + c.aggression * 0.2) {
+        this.setIntent('dash', { dash: 1 }, 14, null);
       } else {
         this.setIntent('approach', { toward: true }, think + 10, null);
       }
@@ -159,7 +169,9 @@ export class Bot {
     if (x < c.aggression * 0.45) this.setIntent('attack', {}, 6, 'light');
     else if (x < c.aggression * 0.65) this.setIntent('attack', {}, 8, 'heavy');
     else if (x < c.aggression * 0.75 && ready('down') && !sk.down.heal) this.setIntent('skill', { down: true }, 8, 'skill');
+    else if (x < c.aggression * 0.82) this.setIntent('attack', { down: true }, 8, 'light');
     else if (x < 0.85) this.setIntent('block', { block: true }, think, null);
+    else if (x < 0.92) this.setIntent('dash', { dash: -1 }, 14, null);
     else this.setIntent('retreat', { away: true }, think, null);
   }
 
@@ -175,6 +187,7 @@ export class Bot {
     if (h.up) inp.up = true;
     if (h.down) inp.down = true;
     if (h.block) inp.block = true;
+    if (h.dash) { inp.dash = me.facing * h.dash; h.dash = 0; }
     if (it.press && !it.pressed && me.canAct) {
       inp[it.press] = true;
       inp[it.press + 'P'] = true;

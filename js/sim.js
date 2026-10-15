@@ -9,12 +9,24 @@ const WALL = 30;
 
 const FREE_STATES = ['idle', 'walk', 'crouch', 'block', 'jump'];
 const SKILL_KEYS = ['neutral', 'forward', 'down'];
+const DOUBLE_TAP = 14;   // frames para el doble toque del dash
+const DOWN_TIME = 40;    // frames tendido en el suelo tras un derribo
+const GETUP_TIME = 16;   // frames levantándose
+
+// Movimiento universal: agachado + ataque ligero
+export const SWEEP = {
+  name: 'Barrido', anim: 'sweepKick',
+  startup: 7, active: 4, recovery: 16, groundOnly: true, knockdown: true,
+  damage: 40, hitstun: 20, blockstun: 10, push: 3, hitstop: 6,
+  hitbox: { x: 4, y: -28, w: 74, h: 28 },
+};
 
 export const EMPTY_INPUT = Object.freeze({
   up: false, down: false, left: false, right: false,
   light: false, heavy: false, skill: false, block: false,
   upP: false, downP: false, leftP: false, rightP: false,
   lightP: false, heavyP: false, skillP: false, blockP: false,
+  dash: 0,
 });
 
 export class Fighter {
@@ -43,6 +55,10 @@ export class Fighter {
     this.stun = 0;
     this.combo = 0;
     this.flash = 0;
+    this.knock = false;
+    this.dashDir = 0;
+    this.tapDir = 0;
+    this.tapFrame = -99;
     this.cooldowns = { neutral: 0, forward: 0, down: 0 };
   }
 
@@ -54,7 +70,9 @@ export class Fighter {
   }
 
   hurtbox() {
-    const h = this.state === 'crouch' ? this.def.height * 0.62 : this.def.height;
+    let h = this.def.height;
+    if (this.state === 'crouch' || (this.state === 'attack' && this.move?.anim === 'sweepKick')) h *= 0.62;
+    if (this.state === 'down' || this.state === 'ko') h = 30;
     const w = this.def.width;
     return { x: this.x - w / 2, y: this.y - h, w, h };
   }
@@ -68,6 +86,8 @@ export class Fighter {
   }
 
   get invulnerable() {
+    if (this.state === 'down' || this.state === 'getup') return true;
+    if (this.state === 'dash' && this.dashDir !== this.facing && this.stateTime < 9) return true;
     const m = this.move;
     return this.state === 'attack' && m && m.invuln && this.moveFrame >= m.invuln.from && this.moveFrame < m.invuln.to;
   }
@@ -100,10 +120,10 @@ export function worldHitbox(f, hb) {
 export class Match {
   constructor({ p1, p2, winsNeeded = 2, roundTime = 60 }) {
     this.fighters = [new Fighter(p1, 0), new Fighter(p2, 1)];
-    if (p1.id === p2.id) this.fighters[1].color = shade(p2.color, -0.45);
     this.winsNeeded = winsNeeded;
     this.roundTime = roundTime;
     this.round = 1;
+    this.slowmo = 0;
     this.projectiles = [];
     this.events = [];      // efectos visuales que consume el renderizador
     this.hitstop = 0;
@@ -130,6 +150,7 @@ export class Match {
     this.frame++;
     this.phaseTime++;
 
+    if (this.slowmo > 0) this.slowmo--;
     if (this.hitstop > 0) { this.hitstop--; return; }
 
     const acting = this.phase === 'fight';
@@ -151,6 +172,7 @@ export class Match {
     this.separate(a, b);
 
     if (this.phase === 'fight' || this.phase === 'ko') {
+      this.checkClash(a, b);
       this.checkMelee(a, b);
       this.checkMelee(b, a);
       this.updateProjectiles();
@@ -181,6 +203,7 @@ export class Match {
     this.roundEndReason = reason;
     if (winner) winner.wins++;
     this.setPhase('ko');
+    if (reason === 'ko') this.slowmo = 50;
     this.events.push({ type: 'roundEnd', reason });
   }
 
@@ -196,8 +219,33 @@ export class Match {
       case 'hitstun':
       case 'blockstun':
         f.stun--;
-        if (f.stun <= 0 && f.grounded) { f.setState('idle'); f.combo = 0; }
+        if (f.stun <= 0 && f.grounded && !f.knock) { f.setState('idle'); f.combo = 0; }
         return;
+
+      case 'down':
+        if (--f.stun <= 0) { f.setState('getup'); f.stun = GETUP_TIME; }
+        return;
+
+      case 'getup':
+        if (--f.stun <= 0) { f.setState('idle'); f.combo = 0; f.knock = false; }
+        return;
+
+      case 'dash': {
+        const back = f.dashDir !== f.facing;
+        const t = f.stateTime;
+        f.vx = f.dashDir * (back ? 10 : 12.5) * Math.max(0.15, 1 - t / 14);
+        if (t % 3 === 0) this.events.push({ type: 'dust', x: f.x - f.dashDir * 16, y: f.y });
+        // Se puede atacar desde el dash conservando parte de la inercia
+        if (t > 3 && (inp.lightP || inp.heavyP)) {
+          const v = f.vx;
+          const key = inp.lightP ? 'light' : 'heavy';
+          f.startMove(key, f.def.attacks[key]);
+          f.vx = v * 0.7;
+          return;
+        }
+        if (t >= 14) f.setState('idle');
+        return;
+      }
 
       case 'attack': {
         const m = f.move;
@@ -240,6 +288,23 @@ export class Match {
       return;
     }
 
+    // Dash: doble toque de dirección (o petición directa del bot)
+    const tap = inp.rightP ? 1 : inp.leftP ? -1 : 0;
+    let dashDir = inp.dash || 0;
+    if (tap) {
+      if (tap === f.tapDir && this.frame - f.tapFrame <= DOUBLE_TAP) dashDir = tap;
+      f.tapDir = tap;
+      f.tapFrame = this.frame;
+    }
+    if (dashDir && !inp.down && !inp.block) {
+      f.dashDir = dashDir;
+      f.tapDir = 0;
+      f.setState('dash');
+      f.stateTime = 0;
+      this.events.push({ type: 'dash', x: f.x, y: f.y, dir: dashDir, color: f.color });
+      return;
+    }
+
     if (inp.skillP) {
       const key = inp.down ? 'down' : (toward ? 'forward' : 'neutral');
       if (f.cooldowns[key] <= 0) {
@@ -248,6 +313,7 @@ export class Match {
         return;
       }
     }
+    if (inp.lightP && inp.down) { f.startMove('sweep', SWEEP); return; }
     if (inp.lightP) { f.startMove('light', def.attacks.light); return; }
     if (inp.heavyP) { f.startMove('heavy', def.attacks.heavy); return; }
 
@@ -282,7 +348,16 @@ export class Match {
       if (f.y >= GROUND) {
         f.y = GROUND;
         f.vy = 0;
-        this.events.push({ type: 'dust', x: f.x, y: f.y });
+        if (f.state === 'hitstun' && f.knock) {
+          f.setState('down');
+          f.stun = DOWN_TIME;
+          f.vx *= 0.35;
+          this.events.push({ type: 'thud', x: f.x, y: f.y });
+        } else if (f.state === 'ko') {
+          this.events.push({ type: 'thud', x: f.x, y: f.y });
+        } else {
+          this.events.push({ type: 'dust', x: f.x, y: f.y });
+        }
         if (f.state === 'jump') f.setState('idle');
         if (f.state === 'attack' && f.move && !f.move.dash) {
           // Aterrizar cancela el ataque aéreo
@@ -292,12 +367,13 @@ export class Match {
       }
     }
     f.x += f.vx;
-    if (f.grounded && ['hitstun', 'blockstun', 'ko'].includes(f.state)) f.vx *= 0.85;
+    if (f.grounded && ['hitstun', 'blockstun', 'ko', 'down', 'getup'].includes(f.state)) f.vx *= 0.82;
     const half = f.def.width / 2;
     f.x = Math.max(WALL + half, Math.min(STAGE_W - WALL - half, f.x));
   }
 
   separate(a, b) {
+    if (['down', 'ko'].includes(a.state) || ['down', 'ko'].includes(b.state)) return;
     const ha = a.hurtbox();
     const hb = b.hurtbox();
     if (!overlap(ha, hb)) return;
@@ -400,7 +476,16 @@ export class Match {
     def.setState('hitstun');
     def.stun = spec.hitstun + extraStun;
     def.vx = dir * spec.push;
-    if (!def.grounded || spec.launch) def.vy = spec.launch ? -9 : -6;
+    // Derribo: los golpes fuertes lanzan al rival, que cae y se queda tendido
+    const knock = spec.knockdown || spec.launch || spec.damage >= 95 || isCounter || def.combo >= 5;
+    if (knock) {
+      def.knock = true;
+      def.vy = spec.launch ? -10.5 : -7.5;
+      def.vx = dir * Math.max(Math.abs(spec.push), 5) * 1.25 * (spec.push < 0 ? -1 : 1);
+      def.y -= 1;
+    } else if (!def.grounded) {
+      def.vy = -6;
+    }
     def.flash = 6;
     this.hitstop = spec.hitstop;
     if (spec.lifesteal && att.state !== 'ko') {
@@ -409,7 +494,7 @@ export class Match {
       this.events.push({ type: 'text', text: `+${gain}`, x: att.x, y: att.y - att.def.height - 20, color: '#5dff9d' });
     }
     const strength = spec.damage >= 100 ? 3 : spec.damage >= 65 ? 2 : 1;
-    this.events.push({ type: 'hit', x: hx, y: hy, strength: isCounter ? 3 : strength, damage: dmg, combo: def.combo });
+    this.events.push({ type: 'hit', x: hx, y: hy, dir, strength: isCounter || knock ? Math.max(strength, 2) + (isCounter ? 1 : 0) : strength, damage: dmg, combo: def.combo, knock });
     if (def.hp <= 0) this.knockOut(def, dir);
   }
 
@@ -417,10 +502,29 @@ export class Match {
     f.hp = 0;
     f.move = null;
     f.setState('ko');
-    f.vy = -10;
+    f.vy = -11;
     f.y -= 1;
-    f.vx = dir * 6;
-    this.hitstop = 22;
+    f.vx = dir * 8;
+    this.hitstop = 24;
+  }
+
+  // Si dos golpes cuerpo a cuerpo se cruzan, las armas chocan y nadie recibe daño
+  checkClash(a, b) {
+    const live = f => f.state === 'attack' && !f.hasHit && f.move.hitbox && f.phase() === 'active';
+    if (!live(a) || !live(b)) return;
+    const ba = worldHitbox(a, a.move.hitbox);
+    const bb = worldHitbox(b, b.move.hitbox);
+    if (!overlap(ba, bb)) return;
+    for (const [f, o] of [[a, b], [b, a]]) {
+      f.hasHit = true;
+      f.moveFrame = f.move.startup + f.move.active;
+      f.vx = (f.x < o.x ? -1 : 1) * 7;
+    }
+    const x = (Math.max(ba.x, bb.x) + Math.min(ba.x + ba.w, bb.x + bb.w)) / 2;
+    const y = (Math.max(ba.y, bb.y) + Math.min(ba.y + ba.h, bb.y + bb.h)) / 2;
+    this.hitstop = 10;
+    this.events.push({ type: 'clash', x, y });
+    this.events.push({ type: 'text', text: '¡CHOQUE!', x, y: y - 50, color: '#ffffff' });
   }
 
   teleport(f, opp) {

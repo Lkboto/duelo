@@ -152,7 +152,7 @@ export const CHARACTERS = {
     id: 'nix', name: 'Nix', weapon: 'Dagas', weaponType: 'daggers',
     description: 'Frágil y escurridizo. Ataques rapidísimos, se teletransporta y esquiva.',
     color: '#9b5de5',
-    maxHp: 940, walkSpeed: 5.0, jumpVel: -16, gravity: 0.8, width: 40, height: 112,
+    maxHp: 1000, walkSpeed: 5.1, jumpVel: -16, gravity: 0.8, width: 40, height: 112,
     attacks: {
       light: {
         name: 'Puñalada', anim: 'slash',
@@ -195,7 +195,7 @@ export const CHARACTERS = {
     description: 'Tiradora a distancia. Llena la pantalla de flechas y coloca trampas.',
     color: '#f2c40f',
     ranged: true,
-    maxHp: 920, walkSpeed: 4.0, jumpVel: -15.5, gravity: 0.8, width: 42, height: 118,
+    maxHp: 980, walkSpeed: 4.2, jumpVel: -15.5, gravity: 0.8, width: 42, height: 118,
     attacks: {
       light: {
         name: 'Golpe de arco', anim: 'slash',
@@ -212,7 +212,7 @@ export const CHARACTERS = {
     },
     skills: {
       neutral: {
-        name: 'Flecha rápida', anim: 'shoot', cooldown: 70,
+        name: 'Flecha rápida', anim: 'shoot', cooldown: 55,
         startup: 9, active: 1, recovery: 14,
         projectile: { x: 40, y: -86, w: 36, h: 10, speed: 14, life: 70, style: 'arrow',
           damage: 50, hitstun: 15, blockstun: 9, push: 4, hitstop: 5 },
@@ -238,7 +238,7 @@ export const CHARACTERS = {
     id: 'tomo', name: 'Tomo', weapon: 'Guanteletes', weaponType: 'fists',
     description: 'Cuerpo a cuerpo puro. Ráfagas de puñetazos, placajes y un agarre imbloqueable.',
     color: '#ef233c',
-    maxHp: 1120, walkSpeed: 4.5, jumpVel: -15, gravity: 0.82, width: 50, height: 118,
+    maxHp: 1200, walkSpeed: 4.7, jumpVel: -15, gravity: 0.82, width: 50, height: 118,
     attacks: {
       light: {
         name: 'Jab', anim: 'punch',

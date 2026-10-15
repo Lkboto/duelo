@@ -13,6 +13,13 @@ const input = new Input();
 const renderer = new Renderer(document.getElementById('canvas'));
 renderer.setStage(Math.floor(Math.random() * STAGES.length));
 
+// Ajustes guardados en el navegador
+const SETTINGS_KEY = 'duelo.settings.v1';
+const settings = (() => {
+  try { return { blood: true, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; } catch { return { blood: true }; }
+})();
+function saveSettings() { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* ignorar */ } }
+
 const state = {
   screen: 'menu',
   mode: 'vsbot',            // 'vsbot' | 'local'
@@ -25,6 +32,7 @@ const state = {
   resultShown: false,
   controlsReturn: 'menu',
   controlsPlayer: 0,
+  slowTick: 0,
 };
 
 // ---------- Pantallas ----------
@@ -167,6 +175,9 @@ document.getElementById('btn-resume').addEventListener('click', resume);
 document.getElementById('btn-quit').addEventListener('click', () => go('menu'));
 document.getElementById('btn-rematch').addEventListener('click', startMatch);
 document.getElementById('chk-hitboxes').addEventListener('change', e => { state.showHitboxes = e.target.checked; });
+const chkBlood = document.getElementById('chk-blood');
+chkBlood.checked = settings.blood;
+chkBlood.addEventListener('change', e => { settings.blood = e.target.checked; saveSettings(); });
 
 function pause() {
   if (!state.match || state.screen !== 'game') return;
@@ -215,6 +226,8 @@ function frame(now) {
   while (acc >= STEP) {
     const m = state.match;
     if (m && state.screen === 'game' && !state.paused) {
+      // Cámara lenta en el K.O.: la simulación avanza un frame de cada tres
+      if (m.slowmo > 0 && (state.slowTick++ % 3) !== 0) { acc -= STEP; continue; }
       const i1 = input.poll(0);
       const i2 = state.bot ? state.bot.getInput(m, m.fighters[1], m.fighters[0]) : input.poll(1);
       input.endPoll();
@@ -234,6 +247,7 @@ function frame(now) {
   if (m) renderer.consume(m.events);
   renderer.draw(m, {
     showHitboxes: state.showHitboxes,
+    blood: settings.blood,
     bindings: input.bindings,
     botIndex: state.bot ? 1 : -1,
     labels: state.mode === 'vsbot'

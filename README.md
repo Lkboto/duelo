@@ -4,7 +4,10 @@ Juego de lucha 1 contra 1 para navegador, al estilo Street Fighter, pensado para
 
 ## Qué incluye esta versión
 
-- **Estética de muñecos de palo** con cuatro escenarios que se eligen al azar (atardecer, bosque, nieve y noche).
+- **Estilo de animación de muñecos de palo**: fondo gris plano, muñeco negro contra muñeco blanco, armas grandes con su color, posturas exageradas y cámara que se acerca y se aleja según la distancia.
+- **Efectos de impacto**: estelas en cada golpe, destellos, chispas, salpicaduras que se quedan en el suelo (se pueden desactivar en *Controles*), humo, grietas y escombros.
+- **Combate con derribos**: los golpes fuertes lanzan al rival por los aires, que cae, se queda tendido y se levanta. Si dos golpes se cruzan, las armas chocan. El K.O. final va a cámara lenta.
+- **Dash** con doble toque de dirección y **barrido** universal con abajo + ataque ligero.
 - **Modo contra bot** con tres dificultades. El bot usa **siempre un personaje aleatorio**, distinto en cada combate.
 - **Modo 2 jugadores** en el mismo teclado.
 - **Selección en cuadrícula**: pasa el ratón por un retrato para ver al personaje en movimiento, sus estadísticas y sus golpes. Incluye casilla «Aleatorio».
@@ -36,6 +39,8 @@ Juego de lucha 1 contra 1 para navegador, al estilo Street Fighter, pensado para
 | Ataque fuerte | H | Num 2 |
 | Habilidad | J (con →/↓ cambia cuál) | Num 3 |
 | Bloquear | L (mantener) | Num 0 |
+| Dash | doble toque ← / → | doble toque ← / → |
+| Barrido | S + G | ↓ + Num 1 |
 | Pausa | Esc | Esc |
 
 Habilidades: **J** sola = habilidad neutral · **hacia el rival + J** = habilidad de avance · **↓ + J** = habilidad baja.
