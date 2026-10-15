@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Duelo — prototipo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="game">
+    <canvas id="canvas"></canvas>
+
+    <!-- Menú principal -->
+    <section class="screen" id="screen-menu">
+      <div class="panel menu-panel">
+        <h1 class="logo">DUELO</h1>
+        <p class="tag">Prototipo · combate 1 contra 1</p>
+        <nav class="menu">
+          <button data-go="vsbot">Contra bot</button>
+          <button data-go="local">2 jugadores (mismo teclado)</button>
+          <button disabled title="Llegará en una próxima versión">Online <span class="soon">próximamente</span></button>
+          <button data-go="controls">Controles</button>
+        </nav>
+        <p class="hint">Esc para pausar durante el combate</p>
+      </div>
+    </section>
+
+    <!-- Selección de personaje -->
+    <section class="screen hidden" id="screen-select">
+      <div class="panel select-panel">
+        <h2 id="select-title">Elige personajes</h2>
+        <div class="select-grid">
+          <div class="pick">
+            <h3>Jugador 1</h3>
+            <div class="cards" data-player="0"></div>
+          </div>
+          <div class="pick">
+            <h3 id="p2-title">Bot</h3>
+            <div class="cards" data-player="1"></div>
+            <div class="difficulty" id="difficulty">
+              <span>Dificultad</span>
+              <div class="seg"></div>
+            </div>
+          </div>
+        </div>
+        <div class="row">
+          <button class="ghost" data-go="menu">Volver</button>
+          <button class="primary" id="btn-fight">¡A luchar!</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Controles -->
+    <section class="screen hidden" id="screen-controls">
+      <div class="panel controls-panel">
+        <h2>Controles</h2>
+        <div class="tabs">
+          <button class="tab active" data-player="0">Jugador 1</button>
+          <button class="tab" data-player="1">Jugador 2</button>
+        </div>
+        <p class="hint">Haz clic en una acción y pulsa la tecla o el botón del ratón que quieras. <kbd>Esc</kbd> cancela.</p>
+        <div class="binds" id="binds"></div>
+        <p class="notice" id="bind-notice">&nbsp;</p>
+        <div class="row">
+          <button class="ghost" id="btn-reset">Restaurar por defecto</button>
+          <button class="primary" id="btn-controls-back">Listo</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Pausa -->
+    <section class="screen hidden" id="screen-pause">
+      <div class="panel menu-panel">
+        <h2>Pausa</h2>
+        <nav class="menu">
+          <button id="btn-resume">Continuar</button>
+          <button data-go="controls">Controles</button>
+          <label class="toggle"><input type="checkbox" id="chk-hitboxes"> Mostrar hitboxes</label>
+          <button id="btn-quit">Salir al menú</button>
+        </nav>
+      </div>
+    </section>
+
+    <!-- Resultado -->
+    <section class="screen hidden" id="screen-result">
+      <div class="panel menu-panel">
+        <h2 id="result-title">¡Victoria!</h2>
+        <p class="tag" id="result-sub"></p>
+        <nav class="menu">
+          <button id="btn-rematch">Revancha</button>
+          <button data-go="select">Cambiar personajes</button>
+          <button data-go="menu">Menú principal</button>
+        </nav>
+      </div>
+    </section>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
