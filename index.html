@@ -30,26 +30,32 @@
 
     <!-- Selección de personaje -->
     <section class="screen hidden" id="screen-select">
-      <div class="panel select-panel">
-        <h2 id="select-title">Elige personajes</h2>
-        <div class="select-grid">
-          <div class="pick">
-            <h3>Jugador 1</h3>
-            <div class="cards" data-player="0"></div>
-          </div>
-          <div class="pick">
-            <h3 id="p2-title">Bot</h3>
-            <div class="cards" data-player="1"></div>
-            <div class="difficulty" id="difficulty">
-              <span>Dificultad</span>
-              <div class="seg"></div>
-            </div>
-          </div>
+      <div class="select">
+        <header class="select-head">
+          <button class="ghost" data-go="menu">← Volver</button>
+          <h2 id="select-title">Elige tu luchador</h2>
+          <div class="turn" id="select-turn"></div>
+        </header>
+        <div class="select-body">
+          <aside class="side" id="side-0" data-player="0">
+            <div class="side-tag">Jugador 1</div>
+            <canvas class="preview" width="280" height="250"></canvas>
+            <div class="info"></div>
+          </aside>
+          <div class="roster" id="roster"></div>
+          <aside class="side" id="side-1" data-player="1">
+            <div class="side-tag" id="side-1-tag">Bot</div>
+            <canvas class="preview" width="280" height="250"></canvas>
+            <div class="info"></div>
+          </aside>
         </div>
-        <div class="row">
-          <button class="ghost" data-go="menu">Volver</button>
-          <button class="primary" id="btn-fight">¡A luchar!</button>
-        </div>
+        <footer class="select-foot">
+          <div class="difficulty" id="difficulty">
+            <span>Dificultad del bot</span>
+            <div class="seg"></div>
+          </div>
+          <button class="primary big" id="btn-fight">¡A luchar!</button>
+        </footer>
       </div>
     </section>
 

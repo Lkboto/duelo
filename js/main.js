@@ -4,17 +4,19 @@ import { CHARACTERS, CHARACTER_LIST } from './characters.js';
 import { Match } from './sim.js';
 import { Bot, DIFFICULTIES } from './bot.js';
 import { Input, ACTIONS, controlName } from './input.js';
-import { Renderer } from './render.js';
+import { Renderer, STAGES } from './render.js';
+import { CharacterSelect } from './select.js';
 
 const STEP = 1000 / 60;
 
 const input = new Input();
 const renderer = new Renderer(document.getElementById('canvas'));
+renderer.setStage(Math.floor(Math.random() * STAGES.length));
 
 const state = {
   screen: 'menu',
   mode: 'vsbot',            // 'vsbot' | 'local'
-  picks: ['kael', 'brakka'],
+  lastPicks: null,
   difficulty: 'normal',
   match: null,
   bot: null,
@@ -53,33 +55,12 @@ function go(target) {
 document.querySelectorAll('[data-go]').forEach(b => b.addEventListener('click', () => go(b.dataset.go)));
 
 // ---------- Selección de personaje ----------
+const select = new CharacterSelect({ getBindings: () => input.bindings });
+
 function openSelect() {
-  document.getElementById('select-title').textContent = state.mode === 'vsbot' ? 'Contra bot' : '2 jugadores';
-  document.getElementById('p2-title').textContent = state.mode === 'vsbot' ? 'Bot' : 'Jugador 2';
-  document.getElementById('difficulty').classList.toggle('hidden', state.mode !== 'vsbot');
-  renderCards();
+  select.open(state.mode);
   renderDifficulty();
   show('select');
-}
-
-function renderCards() {
-  document.querySelectorAll('.cards').forEach(container => {
-    const player = +container.dataset.player;
-    container.innerHTML = '';
-    for (const c of CHARACTER_LIST) {
-      const b = document.createElement('button');
-      b.className = 'card' + (state.picks[player] === c.id ? ' selected' : '');
-      b.innerHTML = `
-        <div class="swatch" style="background:linear-gradient(135deg, ${c.color}, ${c.dark})">${c.name[0]}</div>
-        <div>
-          <div><span class="name">${c.name}</span><span class="weapon">${c.weapon}</span></div>
-          <div class="desc">${c.description}</div>
-          <div class="skills">${c.skills.neutral.name} · ${c.skills.forward.name} · ${c.skills.down.name}</div>
-        </div>`;
-      b.addEventListener('click', () => { state.picks[player] = c.id; renderCards(); });
-      container.appendChild(b);
-    }
-  });
 }
 
 function renderDifficulty() {
@@ -96,12 +77,17 @@ function renderDifficulty() {
 
 document.getElementById('btn-fight').addEventListener('click', startMatch);
 
+// Cada combate (y cada revancha) vuelve a sortear los personajes aleatorios,
+// así que el bot siempre usa un luchador al azar.
 function startMatch() {
-  state.match = new Match({ p1: CHARACTERS[state.picks[0]], p2: CHARACTERS[state.picks[1]] });
+  const [a, b] = select.resolve();
+  state.lastPicks = [a, b];
+  state.match = new Match({ p1: CHARACTERS[a], p2: CHARACTERS[b] });
   state.bot = state.mode === 'vsbot' ? new Bot(state.difficulty, (Math.random() * 1e9) | 0) : null;
   state.paused = false;
   state.resultShown = false;
-  renderer.trail = [null, null];
+  renderer.reset();
+  renderer.setStage(Math.floor(Math.random() * STAGES.length));
   show(null);
 }
 
@@ -201,6 +187,10 @@ window.addEventListener('keydown', e => {
   else if (state.screen === 'select') go('menu');
 });
 
+window.addEventListener('keydown', e => {
+  if (e.code === 'Enter' && state.screen === 'select' && !e.repeat) startMatch();
+});
+
 function showResult() {
   const m = state.match;
   const w = m.matchWinner;
@@ -239,6 +229,7 @@ function frame(now) {
     acc -= STEP;
   }
 
+  if (state.screen === 'select') select.tick();
   const m = state.match;
   if (m) renderer.consume(m.events);
   renderer.draw(m, {

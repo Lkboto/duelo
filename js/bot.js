@@ -78,9 +78,12 @@ export class Bot {
     const c = this.cfg;
     const r = this.rng();
     const dist = Math.abs(opp.x - me.x);
-    const lightRange = me.def.attacks.light.hitbox.x + me.def.attacks.light.hitbox.w + opp.def.width / 2 - 6;
-    const heavyRange = me.def.attacks.heavy.hitbox.x + me.def.attacks.heavy.hitbox.w + opp.def.width / 2 - 6;
+    const reach = m => m.hitbox ? m.hitbox.x + m.hitbox.w + opp.def.width / 2 - 6 : (m.projectile ? 600 : 0);
+    const lightRange = reach(me.def.attacks.light);
+    const heavyRange = reach(me.def.attacks.heavy);
+    const sk = me.def.skills;
     const ready = k => me.cooldowns[k] <= 0;
+    const ranged = !!me.def.ranged;
     const think = Math.round(this.rand(c.think[0], c.think[1]));
 
     if (!me.canAct) { this.setIntent('wait', {}, 2, null); return; }
@@ -90,6 +93,19 @@ export class Bot {
       const opts = [['wait', {}, null], ['retreat', { away: true }, null], ['jump', { up: true }, null], ['crouch', { down: true }, null]];
       const [k, h, p] = opts[Math.floor(this.rng() * opts.length)];
       this.setIntent(k, h, think, p);
+      return;
+    }
+
+    // Curarse si va mal de vida y hay espacio
+    if (sk.down.heal && ready('down') && me.hp < me.def.maxHp * 0.6 && dist > 260 && this.rng() < 0.5) {
+      this.setIntent('skill', { down: true }, 8, 'skill');
+      return;
+    }
+
+    // Personajes a distancia: alejarse si el rival se acerca demasiado
+    if (ranged && dist < 150 && this.rng() < 0.45) {
+      if (sk.forward.teleport && !sk.forward.hitbox && ready('forward')) this.setIntent('skill', { toward: true }, 8, 'skill');
+      else this.setIntent('retreat', { away: true }, think, null);
       return;
     }
 
@@ -109,6 +125,10 @@ export class Bot {
     if (dist > 320) {
       if (ready('neutral') && this.rng() < c.aggression * 0.45) {
         this.setIntent('skill', {}, 8, 'skill');
+      } else if (ranged && me.def.attacks.heavy.projectile && this.rng() < c.aggression * 0.5) {
+        this.setIntent('attack', {}, 8, 'heavy');
+      } else if (ranged && this.rng() < 0.5) {
+        this.setIntent('wait', {}, think, null);
       } else {
         this.setIntent('approach', { toward: true }, think + 10, null);
       }
@@ -117,7 +137,8 @@ export class Bot {
 
     if (dist > lightRange + 10) {
       const x = this.rng();
-      if (ready('forward') && x < c.aggression * 0.25 && dist < 300) {
+      const fwdUseful = sk.forward.hitbox || sk.forward.projectile;
+      if (fwdUseful && ready('forward') && x < c.aggression * 0.25 && dist < 300) {
         this.setIntent('skill', { toward: true }, 8, 'skill');
       } else if (ready('neutral') && x < c.aggression * 0.35) {
         this.setIntent('skill', {}, 8, 'skill');
@@ -137,7 +158,7 @@ export class Bot {
     const x = this.rng();
     if (x < c.aggression * 0.45) this.setIntent('attack', {}, 6, 'light');
     else if (x < c.aggression * 0.65) this.setIntent('attack', {}, 8, 'heavy');
-    else if (x < c.aggression * 0.75 && ready('down')) this.setIntent('skill', { down: true }, 8, 'skill');
+    else if (x < c.aggression * 0.75 && ready('down') && !sk.down.heal) this.setIntent('skill', { down: true }, 8, 'skill');
     else if (x < 0.85) this.setIntent('block', { block: true }, think, null);
     else this.setIntent('retreat', { away: true }, think, null);
   }

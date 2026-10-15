@@ -22,6 +22,7 @@ export class Fighter {
     this.def = def;
     this.index = index;
     this.wins = 0;
+    this.color = def.color;
     this.reset(index === 0 ? 300 : STAGE_W - 300, index === 0 ? 1 : -1);
   }
 
@@ -38,6 +39,7 @@ export class Fighter {
     this.moveKey = null;
     this.moveFrame = 0;
     this.hasHit = false;
+    this.lastHit = -99;
     this.stun = 0;
     this.combo = 0;
     this.flash = 0;
@@ -65,6 +67,11 @@ export class Fighter {
     return 'recovery';
   }
 
+  get invulnerable() {
+    const m = this.move;
+    return this.state === 'attack' && m && m.invuln && this.moveFrame >= m.invuln.from && this.moveFrame < m.invuln.to;
+  }
+
   moveLength() {
     const m = this.move;
     return m.startup + m.active + m.recovery;
@@ -75,6 +82,7 @@ export class Fighter {
     this.moveKey = key;
     this.moveFrame = 0;
     this.hasHit = false;
+    this.lastHit = -99;
     this.setState('attack');
     if (this.grounded) this.vx = 0;
   }
@@ -92,6 +100,7 @@ export function worldHitbox(f, hb) {
 export class Match {
   constructor({ p1, p2, winsNeeded = 2, roundTime = 60 }) {
     this.fighters = [new Fighter(p1, 0), new Fighter(p2, 1)];
+    if (p1.id === p2.id) this.fighters[1].color = shade(p2.color, -0.45);
     this.winsNeeded = winsNeeded;
     this.roundTime = roundTime;
     this.round = 1;
@@ -135,8 +144,8 @@ export class Match {
       if (f.canAct && f.grounded) f.facing = o.x >= f.x ? 1 : -1;
     }
 
-    this.updateFighter(a, ia);
-    this.updateFighter(b, ib);
+    this.updateFighter(a, ia, b);
+    this.updateFighter(b, ib, a);
     this.physics(a);
     this.physics(b);
     this.separate(a, b);
@@ -175,7 +184,7 @@ export class Match {
     this.events.push({ type: 'roundEnd', reason });
   }
 
-  updateFighter(f, inp) {
+  updateFighter(f, inp, opp) {
     f.stateTime++;
     for (const k of SKILL_KEYS) if (f.cooldowns[k] > 0) f.cooldowns[k]--;
     if (f.flash > 0) f.flash--;
@@ -197,6 +206,14 @@ export class Match {
           if (f.moveFrame % 4 === 0) this.events.push({ type: 'dust', x: f.x - f.facing * 20, y: f.y });
         } else if (f.grounded) {
           f.vx *= 0.6;
+        }
+        if (m.hop && f.moveFrame === m.hop.at) { f.vy = m.hop.vy; f.y -= 1; }
+        if (m.teleport && f.moveFrame === m.teleport.at) this.teleport(f, opp);
+        if (m.heal && f.moveFrame === m.startup) {
+          const before = f.hp;
+          f.hp = Math.min(f.def.maxHp, f.hp + m.heal);
+          this.events.push({ type: 'text', text: `+${f.hp - before}`, x: f.x, y: f.y - f.def.height - 20, color: '#5dff9d' });
+          this.events.push({ type: 'heal', x: f.x, y: f.y - f.def.height / 2, color: f.color });
         }
         if (m.projectile && f.moveFrame === m.startup) this.spawnProjectile(f, m.projectile);
         if (m.anim === 'slam' && f.moveFrame === m.startup) {
@@ -305,15 +322,17 @@ export class Match {
   }
 
   checkMelee(att, def) {
-    if (att.state !== 'attack' || att.hasHit) return;
+    if (att.state !== 'attack') return;
     const m = att.move;
+    if (att.hasHit && !(m.rehit && att.moveFrame - att.lastHit >= m.rehit)) return;
     if (!m.hitbox || att.phase() !== 'active') return;
     if (m.groundOnly && !def.grounded) return;
-    if (def.state === 'ko') return;
+    if (def.state === 'ko' || def.invulnerable) return;
     const box = worldHitbox(att, m.hitbox);
     const hurt = def.hurtbox();
     if (!overlap(box, hurt)) return;
     att.hasHit = true;
+    att.lastHit = att.moveFrame;
     const hx = (Math.max(box.x, hurt.x) + Math.min(box.x + box.w, hurt.x + hurt.w)) / 2;
     const hy = (Math.max(box.y, hurt.y) + Math.min(box.y + box.h, hurt.y + hurt.h)) / 2;
     this.resolveHit(att, def, m, att.facing, false, hx, hy);
@@ -384,6 +403,11 @@ export class Match {
     if (!def.grounded || spec.launch) def.vy = spec.launch ? -9 : -6;
     def.flash = 6;
     this.hitstop = spec.hitstop;
+    if (spec.lifesteal && att.state !== 'ko') {
+      const gain = Math.round(dmg * spec.lifesteal);
+      att.hp = Math.min(att.def.maxHp, att.hp + gain);
+      this.events.push({ type: 'text', text: `+${gain}`, x: att.x, y: att.y - att.def.height - 20, color: '#5dff9d' });
+    }
     const strength = spec.damage >= 100 ? 3 : spec.damage >= 65 ? 2 : 1;
     this.events.push({ type: 'hit', x: hx, y: hy, strength: isCounter ? 3 : strength, damage: dmg, combo: def.combo });
     if (def.hp <= 0) this.knockOut(def, dir);
@@ -399,12 +423,29 @@ export class Match {
     this.hitstop = 22;
   }
 
-  spawnProjectile(owner, p) {
+  teleport(f, opp) {
+    const side = opp.x >= f.x ? 1 : -1;
+    const half = f.def.width / 2;
+    let nx = opp.x + side * (opp.def.width / 2 + half + 18);
+    if (nx < WALL + half || nx > STAGE_W - WALL - half) nx = opp.x - side * (opp.def.width / 2 + half + 18);
+    this.events.push({ type: 'teleport', x: f.x, y: f.y - f.def.height / 2, color: f.color });
+    f.x = Math.max(WALL + half, Math.min(STAGE_W - WALL - half, nx));
+    f.facing = opp.x >= f.x ? 1 : -1;
+    this.events.push({ type: 'teleport', x: f.x, y: f.y - f.def.height / 2, color: f.color });
+  }
+
+  spawnProjectile(owner, spec) {
+    if (Array.isArray(spec)) { for (const s of spec) this.spawnProjectile(owner, s); return; }
+    const p = spec;
+    if (p.unique) this.projectiles = this.projectiles.filter(q => !(q.owner === owner.index && q.spec === p));
     this.projectiles.push({
       owner: owner.index,
+      facing: owner.facing,
       x: owner.x + owner.facing * p.x,
       y: owner.y + p.y,
       vx: owner.facing * p.speed,
+      vy: p.vy || 0,
+      g: p.g || 0,
       w: p.w,
       h: p.h,
       life: p.life,
@@ -417,16 +458,22 @@ export class Match {
   updateProjectiles() {
     for (const p of this.projectiles) {
       p.x += p.vx;
+      p.y += p.vy;
+      p.vy += p.g;
       p.life--;
       p.age++;
       if (p.life <= 0 || p.x < -60 || p.x > STAGE_W + 60) p.dead = true;
+      if (p.g && p.vy > 0 && p.y >= GROUND - p.h / 2) {
+        p.dead = true;
+        this.events.push({ type: 'dust', x: p.x, y: GROUND });
+      }
     }
     // Proyectiles enfrentados se anulan
     for (let i = 0; i < this.projectiles.length; i++) {
       for (let j = i + 1; j < this.projectiles.length; j++) {
         const a = this.projectiles[i];
         const b = this.projectiles[j];
-        if (a.dead || b.dead || a.owner === b.owner) continue;
+        if (a.dead || b.dead || a.owner === b.owner || a.vx === 0 || b.vx === 0) continue;
         if (overlap(projBox(a), projBox(b))) {
           a.dead = b.dead = true;
           this.events.push({ type: 'block', x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
@@ -436,12 +483,13 @@ export class Match {
     for (const p of this.projectiles) {
       if (p.dead) continue;
       const target = this.fighters[1 - p.owner];
-      if (target.state === 'ko') continue;
+      if (target.state === 'ko' || target.invulnerable) continue;
       if (p.spec.groundOnly && !target.grounded) continue;
       const box = projBox(p);
       if (overlap(box, target.hurtbox())) {
         p.dead = true;
-        this.resolveHit(this.fighters[p.owner], target, p.spec, Math.sign(p.vx), true, p.x, p.y);
+        const dir = p.vx !== 0 ? Math.sign(p.vx) : (target.x >= p.x ? 1 : -1);
+        this.resolveHit(this.fighters[p.owner], target, p.spec, dir, true, p.x, p.y);
       }
     }
     this.projectiles = this.projectiles.filter(p => !p.dead);
@@ -450,4 +498,11 @@ export class Match {
 
 export function projBox(p) {
   return { x: p.x - p.w / 2, y: p.y - p.h / 2, w: p.w, h: p.h };
+}
+
+export function shade(hex, amt) {
+  const n = parseInt(hex.slice(1), 16);
+  const ch = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map(c =>
+    Math.round(amt < 0 ? c * (1 + amt) : c + (255 - c) * amt));
+  return '#' + ch.map(c => c.toString(16).padStart(2, '0')).join('');
 }
