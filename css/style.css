@@ -17,6 +17,7 @@
   --skew: -10deg;
   --display: "Bebas Neue", Impact, "Arial Narrow", sans-serif;
   --body: "Barlow Condensed", "Arial Narrow", system-ui, sans-serif;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }

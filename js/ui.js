@@ -642,6 +642,10 @@ const UI = {
   // ═════════════ ONLINE ═════════════
   netStatus(msg, kind) {
     const el = document.getElementById('net-status');
+    // dentro de un visor incrustado (p. ej. Claude) WebRTC está bloqueado
+    if (kind === 'err' && window.self !== window.top && !Net.params().local) {
+      msg += ' El modo online no funciona dentro de este visor: juega desde <a href="https://lkboto.github.io/duelo/" target="_blank" rel="noopener" style="color:var(--accent)">lkboto.github.io/duelo</a>.';
+    }
     el.className = 'net-status' + (kind === 'err' ? ' err' : '');
     el.innerHTML = (kind === 'wait' ? '<div class="spinner"></div>' : '') + `<span>${msg}</span>`;
   },
