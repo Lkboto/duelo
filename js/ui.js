@@ -88,6 +88,7 @@ const UI = {
             <button class="menu-item" data-nav data-act="local"><b>Local</b><small>2 a 4 jugadores: teclados y mandos</small><i>▶</i></button>
             <button class="menu-item" data-nav data-act="online"><b>Online</b><small>Crea una sala y pásale el código a un amigo</small><i>▶</i></button>
             <button class="menu-item" data-nav data-act="training"><b>Entrenamiento</b><small>Practica combos contra un muñeco</small><i>▶</i></button>
+            <button class="menu-item" data-nav data-act="spectate"><b>Espectador</b><small>Mira a dos bots en difícil pelear entre ellos</small><i>▶</i></button>
             <button class="menu-item" data-nav data-act="moves"><b>Movimientos</b><small>Golpes, habilidades y combos de cada luchador</small><i>▶</i></button>
             <button class="menu-item" data-nav data-act="controls"><b>Controles</b><small>Cambia cualquier tecla con un clic</small><i>▶</i></button>
             <button class="menu-item" data-nav data-act="options"><b>Opciones</b><small>Volumen, sacudida de cámara, pantalla completa</small><i>▶</i></button>
@@ -294,7 +295,7 @@ const UI = {
     if (name === 'controls') this.renderControls();
     if (name === 'options') this.renderOptions();
     if (name === 'stage') this.renderStage();
-    if (name === 'fight') { document.getElementById('fight-hint').textContent = App.match && App.match.mode === 'training' ? 'Esc: pausa · F2: cajas de golpe · R: reiniciar posiciones' : 'Esc: pausa'; }
+    if (name === 'fight') { document.getElementById('fight-hint').textContent = App.spectating ? 'Modo espectador · Esc: menú' : App.match && App.match.mode === 'training' ? 'Esc: pausa · F2: cajas de golpe · R: reiniciar posiciones' : 'Esc: pausa'; }
     // foco inicial para teclado / mando
     if (name !== 'select' && name !== 'fight') {
       const f = opts.focus ? s.querySelector(opts.focus) : s.querySelector('[data-nav]:not([disabled])');
@@ -319,6 +320,7 @@ const UI = {
     if (a === 'bots' || a === 'local' || a === 'training') this.openSelect(a);
     else if (a === 'online') { this.show('online'); this.netStatus(''); this.resetOnlineBox(); }
     else if (a === 'moves') { this.openMoves(null); }
+    else if (a === 'spectate') App.spectate();
     else if (a === 'controls' || a === 'options') this.openSub(a, 'title');
   },
 

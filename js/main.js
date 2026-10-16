@@ -27,6 +27,7 @@ const App = {
     this.startAttract();
     // enlace directo a una sala: ?sala=CODIGO
     const code = new URLSearchParams(location.search).get('sala');
+    if (location.hash === '#espectador') setTimeout(() => this.spectate(), 300);
     if (code) { UI.show('online'); UI.resetOnlineBox(); UI.netStatus('Pulsa «Unirse» para entrar en la sala ' + code.toUpperCase()); }
     window.addEventListener('beforeunload', () => { if (Net.t) Net.close(); });
     document.addEventListener('visibilitychange', () => {
@@ -89,6 +90,7 @@ const App = {
   },
 
   stopMatch() {
+    this.spectating = false;
     if (this.match && this.match.mode === 'online') Net.end();
     this.match = null; this.paused = false;
     if (!this.bg) this.startAttract();
@@ -127,7 +129,18 @@ const App = {
     this.canvas.focus({ preventScroll: true });
   },
 
+  // bots contra bots en bucle, con HUD completo
+  spectate() {
+    this.spectating = true;
+    const r = VISUAL_RNG, a = r.pick(CHARACTERS).id;
+    let b = r.pick(CHARACTERS).id;
+    if (b === a) b = CHARACTERS[(CHARACTERS.findIndex((c) => c.id === a) + 1) % CHARACTERS.length].id;
+    this.startMatch({ mode: 'bots', stage: r.pick(STAGES).id, firstTo: 2, players: [
+      { charId: a, source: 'bot', level: 'hard', slot: 0, tag: 'CLAUDE A' },
+      { charId: b, source: 'bot', level: 'hard', slot: 1, tag: 'CLAUDE B' }] });
+  },
   matchEnded(champ, m) {
+    if (this.spectating) { setTimeout(() => { if (this.match === m) this.spectate(); }, 3500); return; }
     // deja ver la cámara lenta del K.O. y después enseña los resultados
     setTimeout(() => { if (this.match === m) UI.showResults(champ, m); }, 900);
   },
